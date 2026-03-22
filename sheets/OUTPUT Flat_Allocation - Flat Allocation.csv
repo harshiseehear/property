@@ -1,0 +1,41 @@
+New Building – Flat Allocation (Random Draw),,,,,,,
+Old Building: 30 flats × 450 sq.ft. each   |   New Building: Wing A (10 flats) + Wing B (20 flats),,,,,,,
+,,,,,,,
+Old Flat No.,Owner / Remark,New Flat No.,Wing,Floor,Position in Wing B,Area (sq.ft.),Notes
+1,Individual Owner,B-03-1,Wing B,3,1,450,Random allocation
+2,Individual Owner,A-09,Wing A,9,—,450,Random allocation
+3,Owner A (Old Flats 3 & 5),B-01-1,Wing B,1,1,450,Paired allocation – same floor Wing B-01
+4,Individual Owner,A-08,Wing A,8,—,450,Random allocation
+5,Owner A (Old Flats 3 & 5),B-01-2,Wing B,1,2,450,Paired allocation – same floor Wing B-01
+6,Individual Owner,A-07,Wing A,7,—,450,Random allocation
+7,Individual Owner,B-08-1,Wing B,8,1,450,Random allocation
+8,Individual Owner,B-05-2,Wing B,5,2,450,Random allocation
+9,Individual Owner,A-04,Wing A,4,—,450,Random allocation
+10,Individual Owner,B-10-1,Wing B,10,1,450,Random allocation
+11,Individual Owner,B-04-1,Wing B,4,1,450,Random allocation
+12,Individual Owner,B-07-2,Wing B,7,2,450,Random allocation
+13,Individual Owner,A-02,Wing A,2,—,450,Random allocation
+14,Owner B (Old Flats 14 & 23),B-06-1,Wing B,6,1,450,Paired allocation – same floor Wing B-06
+15,Individual Owner,A-05,Wing A,5,—,450,Random allocation
+16,Individual Owner,B-08-2,Wing B,8,2,450,Random allocation
+17,Individual Owner,A-10,Wing A,10,—,450,Random allocation
+18,Individual Owner,B-09-2,Wing B,9,2,450,Random allocation
+19,Individual Owner,A-01,Wing A,1,—,450,Random allocation
+20,Individual Owner,B-05-1,Wing B,5,1,450,Random allocation
+21,Individual Owner,B-02-2,Wing B,2,2,450,Random allocation
+22,Individual Owner,B-09-1,Wing B,9,1,450,Random allocation
+23,Owner B (Old Flats 14 & 23),B-06-2,Wing B,6,2,450,Paired allocation – same floor Wing B-06
+24,Individual Owner,B-02-1,Wing B,2,1,450,Random allocation
+25,Individual Owner,B-04-2,Wing B,4,2,450,Random allocation
+26,Individual Owner,B-10-2,Wing B,10,2,450,Random allocation
+27,Individual Owner,B-03-2,Wing B,3,2,450,Random allocation
+28,Individual Owner,A-06,Wing A,6,—,450,Random allocation
+29,Individual Owner,B-07-1,Wing B,7,1,450,Random allocation
+30,Individual Owner,A-03,Wing A,3,—,450,Random allocation
+TOTAL  –  30 Old Flats  →  30 New Flats,,,,,,13500,
+,,,,,,,
+LEGEND,,,,,,,
+,Yellow – Owner A: Old Flats 3 & 5 → Paired new flats on same floor in Wing B,,,,,,
+,Green  – Owner B: Old Flats 14 & 23 → Paired new flats on same floor in Wing B,,,,,,
+,Blue   – Individual owners allocated to Wing A,,,,,,
+,Grey   – Individual owners allocated to Wing B,,,,,,
