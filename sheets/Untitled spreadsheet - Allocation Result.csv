@@ -1,0 +1,52 @@
+FLAT ALLOCATION — STACKING PLAN,,,,,,,
+Randomisation Seed:,49327,,Run Date:,22-Mar-2026,,,
+,,,,,,,
+WING A (1 flat/floor),,,,WING B (2 flats/floor),,,
+Floor,New Flat No.,Old Flat No.,,Floor,New Flat No.,Old Flat No.,Old Flat No.
+10,A-10-01,30,,10,B-10-01 / B-10-02,17,7
+9,A-09-01,19,,9,B-09-01 / B-09-02,10,12
+8,A-08-01,24,,8,B-08-01 / B-08-02,3,5
+7,A-07-01,1,,7,B-07-01 / B-07-02,14,23
+6,A-06-01,25,,6,B-06-01 / B-06-02,2,28
+5,A-05-01,6,,5,B-05-01 / B-05-02,29,27
+4,A-04-01,20,,4,B-04-01 / B-04-02,8,15
+3,A-03-01,4,,3,B-03-01 / B-03-02,11,13
+2,A-02-01,21,,2,B-02-01 / B-02-02,26,16
+1,A-01-01,22,,1,B-01-01 / B-01-02,9,18
+,,,,,,,
+CONSTRAINT VERIFICATION,,,,,,,
+Pair 1 (Flats 3 & 5):,"Floor 8, Wing B — Units 01 & 02",,,"  ✓ Same floor, adjacent",,  ✓ Different from Pair 2,
+Pair 2 (Flats 14 & 23):,"Floor 7, Wing B — Units 01 & 02",,,"  ✓ Same floor, adjacent",,  ✓ Different from Pair 1,
+,,,,,,,
+DETAILED ALLOCATION (by Old Flat No.),,,,,,,
+Old Flat No.,Wing,Floor,Unit,New Flat No.,Constraint Group,,
+1,A,7,1,A-07-01,Individual,,
+2,B,6,1,B-06-01,Individual,,
+3,B,8,1,B-08-01,Pair 1,,
+4,A,3,1,A-03-01,Individual,,
+5,B,8,2,B-08-02,Pair 1,,
+6,A,5,1,A-05-01,Individual,,
+7,B,10,2,B-10-02,Individual,,
+8,B,4,1,B-04-01,Individual,,
+9,B,1,1,B-01-01,Individual,,
+10,B,9,1,B-09-01,Individual,,
+11,B,3,1,B-03-01,Individual,,
+12,B,9,2,B-09-02,Individual,,
+13,B,3,2,B-03-02,Individual,,
+14,B,7,1,B-07-01,Pair 2,,
+15,B,4,2,B-04-02,Individual,,
+16,B,2,2,B-02-02,Individual,,
+17,B,10,1,B-10-01,Individual,,
+18,B,1,2,B-01-02,Individual,,
+19,A,9,1,A-09-01,Individual,,
+20,A,4,1,A-04-01,Individual,,
+21,A,2,1,A-02-01,Individual,,
+22,A,1,1,A-01-01,Individual,,
+23,B,7,2,B-07-02,Pair 2,,
+24,A,8,1,A-08-01,Individual,,
+25,A,6,1,A-06-01,Individual,,
+26,B,2,1,B-02-01,Individual,,
+27,B,5,2,B-05-02,Individual,,
+28,B,6,2,B-06-02,Individual,,
+29,B,5,1,B-05-01,Individual,,
+30,A,10,1,A-10-01,Individual,,

@@ -187,10 +187,149 @@
       .controls { flex-direction: column; }
       .controls button { width: 100%; }
     }
+
+    /* ======================== DEV MODE STYLES ======================== */
+    #custom-app-frame {
+      position: fixed; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      border: none; z-index: 1000;
+      background: white;
+    }
+
+    #dev-toggle {
+      position: fixed; bottom: 16px; right: 16px;
+      width: 40px; height: 40px; border-radius: 50%;
+      background: #334155; color: white; border: none;
+      font-size: 1.2rem; cursor: pointer; z-index: 9999;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.2s;
+    }
+    #dev-toggle:hover { background: #1e293b; }
+    #dev-toggle.active { background: var(--primary); }
+
+    #custom-indicator {
+      position: fixed; top: 0; left: 50%; transform: translateX(-50%);
+      background: #7c3aed; color: white; padding: 2px 16px;
+      font-size: 0.75rem; border-radius: 0 0 6px 6px;
+      z-index: 9998; letter-spacing: 0.03em;
+    }
+
+    #dev-panel {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(15,23,42,0.85); z-index: 10000;
+      display: flex; align-items: center; justify-content: center;
+      backdrop-filter: blur(4px);
+    }
+
+    .dev-panel-inner {
+      background: white; border-radius: 12px;
+      width: 90%; max-width: 720px; max-height: 90vh;
+      overflow-y: auto; padding: 2rem;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+
+    .dev-panel-inner h2 {
+      font-size: 1.3rem; margin-bottom: 0.25rem;
+    }
+    .dev-panel-inner .subtitle {
+      color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem;
+    }
+
+    #dev-drop-zone {
+      border: 2px dashed var(--border); border-radius: var(--radius);
+      padding: 2rem; text-align: center; cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      margin-bottom: 1rem;
+    }
+    #dev-drop-zone:hover, #dev-drop-zone.drag-over {
+      border-color: #7c3aed; background: #f5f3ff;
+    }
+
+    #dev-preview-frame {
+      width: 100%; height: 300px;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      margin: 1rem 0; background: #f8fafc;
+    }
+
+    .dev-actions {
+      display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1rem;
+    }
+    .dev-actions button { flex: 1; min-width: 120px; }
+
+    .btn-purple { background: #7c3aed; color: white; }
+    .btn-purple:hover:not(:disabled) { background: #6d28d9; }
+    .btn-purple:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-danger:hover { background: #b91c1c; }
+
+    .dev-status {
+      margin-top: 1rem; padding: 0.5rem 0.75rem;
+      border-radius: var(--radius); font-size: 0.85rem;
+    }
+    .dev-status.info { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+    .dev-status.success { background: var(--success-bg); color: #166534; border: 1px solid #86efac; }
+    .dev-status.warning { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+
+    .dev-current-info {
+      margin-top: 1rem; padding: 0.75rem 1rem;
+      background: #f8fafc; border-radius: var(--radius);
+      font-size: 0.85rem; color: var(--muted);
+      border: 1px solid var(--border);
+    }
+
+    .dev-kbd {
+      display: inline-block; padding: 2px 6px;
+      background: #f1f5f9; border: 1px solid #cbd5e1;
+      border-radius: 4px; font-size: 0.75rem;
+      font-family: monospace; color: var(--muted);
+    }
   </style>
 </head>
 <body>
-  <div class="container">
+  <!-- Custom app iframe (shown when custom HTML loaded in user mode) -->
+  <iframe id="custom-app-frame" class="hidden"></iframe>
+
+  <!-- Custom version indicator -->
+  <div id="custom-indicator" class="hidden">&#9670; Running uploaded version</div>
+
+  <!-- Floating dev mode toggle -->
+  <button id="dev-toggle" title="Developer Mode (Ctrl+Shift+D)">&#9881;</button>
+
+  <!-- Dev Mode Panel -->
+  <div id="dev-panel" class="hidden">
+    <div class="dev-panel-inner">
+      <h2>&#128736; Developer Mode</h2>
+      <p class="subtitle">Upload a new HTML file to replace this application. <span class="dev-kbd">Ctrl+Shift+D</span> to toggle.</p>
+
+      <div id="dev-drop-zone">
+        <div style="font-size:2rem">&#128196;</div>
+        <div style="font-weight:500">Drop an HTML file or click to browse</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-top:0.25rem">Monolithic .html file with all CSS/JS inline</div>
+        <input type="file" id="dev-file-input" accept=".html,.htm" hidden>
+      </div>
+
+      <div id="dev-file-info" class="hidden" style="font-size:0.85rem;padding:0.5rem 0.75rem;background:#f5f3ff;border-radius:6px;"></div>
+
+      <div id="dev-preview-section" class="hidden">
+        <div style="font-size:0.85rem;font-weight:500;margin-top:1rem">Preview:</div>
+        <iframe id="dev-preview-frame" sandbox="allow-scripts allow-same-origin"></iframe>
+      </div>
+
+      <div class="dev-actions">
+        <button id="dev-update-btn" class="btn-purple" disabled>Update App</button>
+        <button id="dev-reset-btn" class="btn-danger hidden">Reset to Default</button>
+        <button id="dev-close-btn" class="btn-secondary">Back to User Mode</button>
+      </div>
+
+      <div id="dev-status"></div>
+
+      <div id="dev-current-info" class="dev-current-info hidden"></div>
+    </div>
+  </div>
+
+  <div class="container" id="default-app">
     <header>
       <h1>Flat Allocation System</h1>
       <p>Upload input file &rarr; Run allocation &rarr; Download results</p>
@@ -285,6 +424,175 @@
   <script>
   (function() {
     'use strict';
+
+    // ======================== BOOTSTRAP LOADER ========================
+    var STORAGE_KEY = '__flatapp_custom_html';
+    var customHtml = localStorage.getItem(STORAGE_KEY);
+    var defaultApp = document.getElementById('default-app');
+    var customFrame = document.getElementById('custom-app-frame');
+    var customIndicator = document.getElementById('custom-indicator');
+    var devToggle = document.getElementById('dev-toggle');
+    var devPanel = document.getElementById('dev-panel');
+    var devDropZone = document.getElementById('dev-drop-zone');
+    var devFileInput = document.getElementById('dev-file-input');
+    var devFileInfo = document.getElementById('dev-file-info');
+    var devPreviewSection = document.getElementById('dev-preview-section');
+    var devPreviewFrame = document.getElementById('dev-preview-frame');
+    var devUpdateBtn = document.getElementById('dev-update-btn');
+    var devResetBtn = document.getElementById('dev-reset-btn');
+    var devCloseBtn = document.getElementById('dev-close-btn');
+    var devStatusEl = document.getElementById('dev-status');
+    var devCurrentInfo = document.getElementById('dev-current-info');
+
+    var pendingHtml = null;
+    var isDevMode = false;
+
+    // --- If custom HTML exists, show it in iframe and hide default app ---
+    function activateCustomApp() {
+      customHtml = localStorage.getItem(STORAGE_KEY);
+      if (customHtml && !isDevMode) {
+        defaultApp.classList.add('hidden');
+        customFrame.classList.remove('hidden');
+        customFrame.srcdoc = customHtml;
+        customIndicator.classList.remove('hidden');
+      } else {
+        defaultApp.classList.remove('hidden');
+        customFrame.classList.add('hidden');
+        customFrame.removeAttribute('srcdoc');
+        customIndicator.classList.add('hidden');
+      }
+    }
+
+    // Update info about current stored version
+    function updateDevInfo() {
+      var stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        var sizeKB = (stored.length / 1024).toFixed(1);
+        devCurrentInfo.innerHTML = '<strong>Current stored version:</strong> ' + sizeKB + ' KB in localStorage';
+        devCurrentInfo.classList.remove('hidden');
+        devResetBtn.classList.remove('hidden');
+      } else {
+        devCurrentInfo.classList.add('hidden');
+        devResetBtn.classList.add('hidden');
+      }
+    }
+
+    function showDevStatus(msg, type) {
+      devStatusEl.className = 'dev-status ' + type;
+      devStatusEl.textContent = msg;
+    }
+
+    function clearDevStatus() {
+      devStatusEl.className = '';
+      devStatusEl.textContent = '';
+    }
+
+    // --- Dev Mode toggle ---
+    function openDevMode() {
+      isDevMode = true;
+      devPanel.classList.remove('hidden');
+      devToggle.classList.add('active');
+      defaultApp.classList.remove('hidden');
+      customFrame.classList.add('hidden');
+      customFrame.removeAttribute('srcdoc');
+      customIndicator.classList.add('hidden');
+      updateDevInfo();
+      clearDevStatus();
+    }
+
+    function closeDevMode() {
+      isDevMode = false;
+      devPanel.classList.add('hidden');
+      devToggle.classList.remove('active');
+      pendingHtml = null;
+      devFileInfo.classList.add('hidden');
+      devPreviewSection.classList.add('hidden');
+      devUpdateBtn.disabled = true;
+      activateCustomApp();
+    }
+
+    devToggle.addEventListener('click', function() {
+      if (isDevMode) closeDevMode(); else openDevMode();
+    });
+
+    // Keyboard shortcut: Ctrl+Shift+D
+    document.addEventListener('keydown', function(e) {
+      if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+        e.preventDefault();
+        if (isDevMode) closeDevMode(); else openDevMode();
+      }
+    });
+
+    // --- Dev file upload ---
+    devDropZone.addEventListener('click', function() { devFileInput.click(); });
+    devDropZone.addEventListener('dragover', function(e) {
+      e.preventDefault(); devDropZone.classList.add('drag-over');
+    });
+    devDropZone.addEventListener('dragleave', function() {
+      devDropZone.classList.remove('drag-over');
+    });
+    devDropZone.addEventListener('drop', function(e) {
+      e.preventDefault(); devDropZone.classList.remove('drag-over');
+      if (e.dataTransfer.files.length) handleDevFile(e.dataTransfer.files[0]);
+    });
+    devFileInput.addEventListener('change', function() {
+      if (devFileInput.files.length) handleDevFile(devFileInput.files[0]);
+    });
+
+    function handleDevFile(file) {
+      if (!/\.html?$/i.test(file.name)) {
+        showDevStatus('Please upload an .html file.', 'warning');
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        pendingHtml = e.target.result;
+        var sizeKB = (pendingHtml.length / 1024).toFixed(1);
+        devFileInfo.innerHTML = '<strong>&#10003; ' + file.name + '</strong> &mdash; ' + sizeKB + ' KB';
+        devFileInfo.classList.remove('hidden');
+        devPreviewSection.classList.remove('hidden');
+        devPreviewFrame.srcdoc = pendingHtml;
+        devUpdateBtn.disabled = false;
+        showDevStatus('File loaded. Preview below. Click "Update App" to save.', 'info');
+      };
+      reader.readAsText(file);
+    }
+
+    // --- Update app ---
+    devUpdateBtn.addEventListener('click', function() {
+      if (!pendingHtml) return;
+      try {
+        localStorage.setItem(STORAGE_KEY, pendingHtml);
+        customHtml = pendingHtml;
+        pendingHtml = null;
+        devUpdateBtn.disabled = true;
+        showDevStatus('App updated! Click "Back to User Mode" to see it live.', 'success');
+        updateDevInfo();
+      } catch (err) {
+        showDevStatus('Failed to save: ' + err.message + ' (localStorage may be full)', 'warning');
+      }
+    });
+
+    // --- Reset to default ---
+    devResetBtn.addEventListener('click', function() {
+      localStorage.removeItem(STORAGE_KEY);
+      customHtml = null;
+      showDevStatus('Reset to default. The built-in app will be used.', 'success');
+      updateDevInfo();
+    });
+
+    // --- Close dev mode ---
+    devCloseBtn.addEventListener('click', closeDevMode);
+
+    // --- On load: activate custom app if stored ---
+    activateCustomApp();
+    // Show reset button if a custom version exists
+    if (localStorage.getItem(STORAGE_KEY)) {
+      devResetBtn.classList.remove('hidden');
+    }
+
+    // ======================== DEFAULT APP LOGIC ========================
+    // (Only relevant when the built-in app is shown)
 
     // ======================== STATE ========================
     var parsedData = null;       // { flats, pairs, excelSeed }

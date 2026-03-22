@@ -1,0 +1,18 @@
+BUILDING CONFIGURATION,,
+Parameter,Value,Notes
+OLD BUILDING,,
+Total Old Flats,30,
+Flat Size (sq ft),450,
+,,
+NEW BUILDING — WING A,,
+Floors,10,
+Flats per Floor,1,
+Total Wing A Flats,10,Auto-calculated
+,,
+NEW BUILDING — WING B,,
+Floors,10,
+Flats per Floor,2,
+Total Wing B Flats,20,Auto-calculated
+,,
+TOTALS,,
+Total New Flats,30,Must equal Total Old Flats
