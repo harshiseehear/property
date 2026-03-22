@@ -1,6 +1,0 @@
-RANDOMISATION SEED,,
-,,
-Leave blank to auto-generate a new seed on each run. Enter a value to reproduce a previous allocation exactly.,,
-Parameter,Value,Notes
-Seed Value,49327,Leave blank for random. Enter integer to reproduce.
-Run Description,,"Optional label, e.g. 'Official Draw — March 2026'"

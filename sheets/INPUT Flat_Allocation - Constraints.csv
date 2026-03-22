@@ -1,5 +1,0 @@
-ALLOCATION CONSTRAINTS,,,
-Constraint ID,Old Flat Numbers,Rule,Wing Requirement
-PAIR-1,"3, 5","Same floor, adjacent units (01 & 02). Different floor from PAIR-2.",Wing B only
-PAIR-2,"14, 23","Same floor, adjacent units (01 & 02). Different floor from PAIR-1.",Wing B only
-INDIVIDUAL,All others (26 flats),Random allocation — no restrictions.,Wing A or B
