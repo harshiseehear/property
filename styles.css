@@ -112,8 +112,9 @@ th {
   text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.75rem;
 }
 td { padding: 0.4rem 0.6rem; border-bottom: 1px solid #2b2014; }
-tr.pair-1 td, td.pair-1 { background: #f5f0e8; }
-tr.pair-2 td, td.pair-2 { background: #f5f0e8; }
+tr.constrained td, td.constrained { background: #ece4d4; }
+td.unoccupied { color: #8a7a6a; font-style: italic; }
+td.no-unit { color: #ccc; }
 
 .layout-table th, .layout-table td { text-align: center; }
 .layout-table .floor-num { font-weight: 700; }
@@ -121,6 +122,8 @@ tr.pair-2 td, td.pair-2 { background: #f5f0e8; }
 .legend { display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: 0.75rem; margin-top: 0.5rem; }
 .legend span { display: flex; align-items: center; gap: 0.3rem; }
 .legend-swatch { display: inline-block; width: 12px; height: 12px; border: 1px solid #2b2014; }
+.legend-swatch.constrained { background: #ece4d4; }
+.legend-swatch.unoccupied { background: #f5f0e8; border-style: dashed; }
 
 .hidden { display: none !important; }
 

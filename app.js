@@ -2,8 +2,8 @@ var __flatAppFn = function() {
   'use strict';
 
   // ======================== STATE ========================
-  var parsedData = null;       // { flats, pairs, excelSeed }
-  var allocationResult = null; // { allocations, auditTrail, validation, seed, pairs }
+  var parsedData = null;
+  var allocationResult = null;
 
   // ======================== UTILITIES ========================
   function escapeHtml(str) {
@@ -14,13 +14,18 @@ var __flatAppFn = function() {
 
   function pad2(n) { return n < 10 ? '0' + n : '' + n; }
 
+  function makeFlatCode(wing, floor, unit) {
+    return wing + '-' + pad2(floor) + '-' + pad2(unit);
+  }
+
+  function parseCode(code) {
+    var parts = code.split('-');
+    return { wing: parts[0], floor: parseInt(parts[1], 10), unit: parseInt(parts[2], 10) };
+  }
+
   function showStatus(el, msg, type) {
     el.textContent = msg;
     el.className = 'status-msg visible ' + type;
-  }
-
-  function hideStatus(el) {
-    el.className = 'status-msg';
   }
 
   // ======================== SEEDED PRNG (mulberry32) ========================
@@ -56,19 +61,20 @@ var __flatAppFn = function() {
   }
 
   // ======================== DOM REFS ========================
-  var dropZone      = document.getElementById('drop-zone');
-  var fileInput     = document.getElementById('file-input');
-  var fileInfo      = document.getElementById('file-info');
-  var parseStatus   = document.getElementById('parse-status');
-  var runBtn        = document.getElementById('run-btn');
-  var rerunBtn      = document.getElementById('rerun-btn');
-  var runStatus     = document.getElementById('run-status');
+  var dropZone       = document.getElementById('drop-zone');
+  var fileInput      = document.getElementById('file-input');
+  var fileInfo       = document.getElementById('file-info');
+  var parseStatus    = document.getElementById('parse-status');
+  var runBtn         = document.getElementById('run-btn');
+  var rerunBtn       = document.getElementById('rerun-btn');
+  var runStatus      = document.getElementById('run-status');
   var resultsSection = document.getElementById('results-section');
-  var seedValueEl   = document.getElementById('seed-value');
+  var seedValueEl    = document.getElementById('seed-value');
   var validationList = document.getElementById('validation-list');
-  var allocTbody    = document.querySelector('#allocation-table tbody');
-  var layoutTbody   = document.querySelector('#layout-table tbody');
-  var downloadBtn   = document.getElementById('download-btn');
+  var allocTbody     = document.querySelector('#allocation-table tbody');
+  var layoutThead    = document.getElementById('layout-thead');
+  var layoutTbody    = document.querySelector('#layout-table tbody');
+  var downloadBtn    = document.getElementById('download-btn');
 
   // ======================== FILE UPLOAD ========================
   dropZone.addEventListener('click', function() { fileInput.click(); });
@@ -105,11 +111,21 @@ var __flatAppFn = function() {
         var wb = XLSX.read(data, { type: 'array' });
         parsedData = parseWorkbook(wb);
 
+        var counts = { pair: 0, 'same-wing': 0, 'floor-pref': 0 };
+        for (var c = 0; c < parsedData.constraints.length; c++) {
+          counts[parsedData.constraints[c].type]++;
+        }
+        var parts = [];
+        if (counts.pair > 0) parts.push(counts.pair + ' pair(s)');
+        if (counts['same-wing'] > 0) parts.push(counts['same-wing'] + ' same-wing');
+        if (counts['floor-pref'] > 0) parts.push(counts['floor-pref'] + ' floor-pref');
+
         fileInfo.innerHTML =
-          '<strong>' + escapeHtml(file.name) + '</strong> - ' +
-          parsedData.flats.length + ' flats loaded, ' +
-          parsedData.pairs.length + ' pair(s) detected' +
-          (parsedData.excelSeed != null ? ', seed: ' + parsedData.excelSeed : ', no seed in file');
+          '<strong>' + escapeHtml(file.name) + '</strong><br>' +
+          'Old: ' + parsedData.totalOldFlats + ' flats | ' +
+          'New: ' + parsedData.totalNewFlats + ' flats (' + parsedData.wingNames.length + ' wing(s): ' + parsedData.wingNames.join(', ') + ')<br>' +
+          'Constraints: ' + (parts.length > 0 ? parts.join(', ') : 'none') +
+          (parsedData.excelSeed != null ? ' | Seed: ' + parsedData.excelSeed : '');
         fileInfo.classList.add('visible');
 
         showStatus(parseStatus, 'File parsed successfully. Ready to run allocation.', 'success');
@@ -125,62 +141,156 @@ var __flatAppFn = function() {
 
   // ======================== PARSE WORKBOOK ========================
   function parseWorkbook(wb) {
-    // --- Flat Owners ---
+
+    // ---- Old Building ----
+    var oldSheet = wb.Sheets['Old Building'];
+    if (!oldSheet) throw new Error('Sheet "Old Building" not found.');
+    var oldRows = XLSX.utils.sheet_to_json(oldSheet, { header: 1 });
+    if (oldRows.length < 2) throw new Error('"Old Building" needs a header row and data.');
+
+    var oldBuilding = [];
+    var totalOldFlats = 0;
+    for (var oi = 1; oi < oldRows.length; oi++) {
+      var orow = oldRows[oi];
+      if (!orow || orow[0] == null || orow[0] === '') continue;
+      var oWing = orow[0].toString().trim();
+      var oFloor = parseInt(orow[1], 10);
+      var oUnits = parseInt(orow[2], 10);
+      if (isNaN(oFloor) || isNaN(oUnits) || oUnits <= 0) continue;
+      oldBuilding.push({ wing: oWing, floor: oFloor, units: oUnits });
+      totalOldFlats += oUnits;
+    }
+    if (totalOldFlats === 0) throw new Error('Old building has 0 flats.');
+
+    // ---- New Building ----
+    var newSheet = wb.Sheets['New Building'];
+    if (!newSheet) throw new Error('Sheet "New Building" not found.');
+    var newRows = XLSX.utils.sheet_to_json(newSheet, { header: 1 });
+    if (newRows.length < 2) throw new Error('"New Building" needs a header row and data.');
+
+    var newBuilding = [];
+    var newWingFloorUnits = {};   // wing -> floor -> unitCount
+    var allNewFlats = [];
+    var wingMaxUnits = {};        // wing -> max units on any floor
+    var allFloorsSet = {};
+    var wingNames = [];
+    var wingNameSet = {};
+
+    for (var ni = 1; ni < newRows.length; ni++) {
+      var nrow = newRows[ni];
+      if (!nrow || nrow[0] == null || nrow[0] === '') continue;
+      var nWing = nrow[0].toString().trim();
+      var nFloor = parseInt(nrow[1], 10);
+      var nUnits = parseInt(nrow[2], 10);
+      if (isNaN(nFloor) || isNaN(nUnits) || nUnits <= 0) continue;
+      newBuilding.push({ wing: nWing, floor: nFloor, units: nUnits });
+
+      if (!newWingFloorUnits[nWing]) newWingFloorUnits[nWing] = {};
+      newWingFloorUnits[nWing][nFloor] = nUnits;
+
+      if (!wingMaxUnits[nWing] || nUnits > wingMaxUnits[nWing]) {
+        wingMaxUnits[nWing] = nUnits;
+      }
+      allFloorsSet[nFloor] = true;
+      if (!wingNameSet[nWing]) {
+        wingNameSet[nWing] = true;
+        wingNames.push(nWing);
+      }
+      for (var u = 1; u <= nUnits; u++) {
+        allNewFlats.push(makeFlatCode(nWing, nFloor, u));
+      }
+    }
+    wingNames.sort();
+
+    var totalNewFlats = allNewFlats.length;
+    if (totalNewFlats === 0) throw new Error('New building has 0 flats.');
+    if (totalNewFlats < totalOldFlats) {
+      throw new Error('New building (' + totalNewFlats + ') has fewer flats than old building (' + totalOldFlats + ').');
+    }
+
+    // ---- Flat Owners ----
     var ownerSheet = wb.Sheets['Flat Owners'];
     if (!ownerSheet) throw new Error('Sheet "Flat Owners" not found.');
-
-    var rows = XLSX.utils.sheet_to_json(ownerSheet, { header: 1 });
-    if (rows.length < 3) throw new Error('"Flat Owners" sheet has too few rows.');
+    var ownerRows = XLSX.utils.sheet_to_json(ownerSheet, { header: 1 });
+    if (ownerRows.length < 3) throw new Error('"Flat Owners" needs header rows + data.');
 
     var flats = [];
-    for (var i = 2; i < rows.length; i++) {
-      var row = rows[i];
-      if (!row || row.length === 0 || row[0] == null || row[0] === '') continue;
-      var flatNo = parseInt(row[0], 10);
+    for (var fi = 2; fi < ownerRows.length; fi++) {
+      var frow = ownerRows[fi];
+      if (!frow || frow.length === 0 || frow[0] == null || frow[0] === '') continue;
+      var flatNo = parseInt(frow[0], 10);
       if (isNaN(flatNo)) continue;
       flats.push({
         oldFlatNo: flatNo,
-        ownerName: (row[1] || '').toString().trim(),
-        contact:   (row[2] || '').toString().trim(),
-        constraintGroup: (row[3] || 'Individual').toString().trim(),
-        wingPreference:  (row[4] || 'Any').toString().trim()
+        ownerName: (frow[1] || '').toString().trim(),
+        contact:   (frow[2] || '').toString().trim(),
+        constraintId: (frow[3] || '').toString().trim()
       });
     }
-
-    if (flats.length !== 30) {
-      throw new Error('Expected 30 flats, found ' + flats.length + '.');
+    if (flats.length !== totalOldFlats) {
+      throw new Error('Expected ' + totalOldFlats + ' flats in "Flat Owners" (matching old building), found ' + flats.length + '.');
     }
 
-    // --- Parse constraint groups dynamically ---
-    var pairMap = {};
-    var pairRe = /^Pair\s+(\d+)\s+\(with\s+#(\d+)\)$/i;
+    // ---- Constraints ----
+    var constraints = {};
+    var constraintSheet = wb.Sheets['Constraints'];
+    if (constraintSheet) {
+      var cRows = XLSX.utils.sheet_to_json(constraintSheet, { header: 1 });
+      for (var ci = 1; ci < cRows.length; ci++) {
+        var crow = cRows[ci];
+        if (!crow || crow[0] == null || crow[0] === '') continue;
+        var cId = crow[0].toString().trim();
+        var cType = (crow[1] || '').toString().trim().toLowerCase();
+        var cWing = (crow[2] || '').toString().trim();
+        var cFloor = (crow[3] != null && crow[3] !== '') ? parseInt(crow[3], 10) : null;
 
-    for (var j = 0; j < flats.length; j++) {
-      var m = pairRe.exec(flats[j].constraintGroup);
-      if (m) {
-        var pid = parseInt(m[1], 10);
-        var partner = parseInt(m[2], 10);
-        if (!pairMap[pid]) pairMap[pid] = [];
-        pairMap[pid].push({ flatNo: flats[j].oldFlatNo, partner: partner });
+        if (['pair', 'same-wing', 'floor-pref'].indexOf(cType) < 0) {
+          throw new Error('Constraint "' + cId + '": unknown type "' + cType + '". Valid: pair, same-wing, floor-pref.');
+        }
+        if (cWing && !wingNameSet[cWing]) {
+          throw new Error('Constraint "' + cId + '" references wing "' + cWing + '" not in new building.');
+        }
+        if (cFloor != null && !allFloorsSet[cFloor]) {
+          throw new Error('Constraint "' + cId + '" references floor ' + cFloor + ' not in new building.');
+        }
+
+        constraints[cId] = { id: cId, type: cType, wing: cWing, floor: cFloor, flats: [] };
       }
     }
 
-    var pairs = [];
-    var pairIds = Object.keys(pairMap).sort(function(a, b) { return a - b; });
-    for (var k = 0; k < pairIds.length; k++) {
-      var id = pairIds[k];
-      var members = pairMap[id];
-      if (members.length !== 2) {
-        throw new Error('Pair ' + id + ' must have exactly 2 flats (found ' + members.length + ').');
+    // Link flats → constraints
+    for (var li = 0; li < flats.length; li++) {
+      var cid = flats[li].constraintId;
+      if (cid && cid !== '') {
+        if (!constraints[cid]) {
+          throw new Error('Flat ' + flats[li].oldFlatNo + ' references constraint "' + cid + '" not in Constraints sheet.');
+        }
+        constraints[cid].flats.push(flats[li].oldFlatNo);
       }
-      if (members[0].partner !== members[1].flatNo || members[1].partner !== members[0].flatNo) {
-        throw new Error('Pair ' + id + ' flats do not cross-reference each other.');
-      }
-      members.sort(function(a, b) { return a.flatNo - b.flatNo; });
-      pairs.push({ pairId: parseInt(id, 10), flat1: members[0].flatNo, flat2: members[1].flatNo });
     }
 
-    // --- Randomisation Seed ---
+    // Validate membership counts
+    var constraintList = [];
+    var cKeys = Object.keys(constraints);
+    for (var ck = 0; ck < cKeys.length; ck++) {
+      var co = constraints[cKeys[ck]];
+      if (co.type === 'pair' && co.flats.length !== 2) {
+        throw new Error('"' + co.id + '" (pair) needs exactly 2 flats, found ' + co.flats.length + '.');
+      }
+      if (co.type === 'same-wing' && co.flats.length < 2) {
+        throw new Error('"' + co.id + '" (same-wing) needs ≥2 flats, found ' + co.flats.length + '.');
+      }
+      if (co.type === 'floor-pref' && co.flats.length < 1) {
+        throw new Error('"' + co.id + '" (floor-pref) needs ≥1 flat, found ' + co.flats.length + '.');
+      }
+      if (co.type === 'floor-pref' && (co.floor == null || isNaN(co.floor))) {
+        throw new Error('"' + co.id + '" (floor-pref) must specify a floor number.');
+      }
+      co.flats.sort(function(a, b) { return a - b; });
+      constraintList.push(co);
+    }
+
+    // ---- Randomisation Seed ----
     var excelSeed = null;
     var seedSheet = wb.Sheets['Randomisation Seed'];
     if (seedSheet) {
@@ -191,242 +301,396 @@ var __flatAppFn = function() {
       }
     }
 
-    return { flats: flats, pairs: pairs, excelSeed: excelSeed };
+    return {
+      oldBuilding: oldBuilding,
+      newBuilding: newBuilding,
+      newWingFloorUnits: newWingFloorUnits,
+      wingMaxUnits: wingMaxUnits,
+      wingNames: wingNames,
+      allFloors: Object.keys(allFloorsSet).map(Number).sort(function(a, b) { return a - b; }),
+      allNewFlats: allNewFlats,
+      totalOldFlats: totalOldFlats,
+      totalNewFlats: totalNewFlats,
+      flats: flats,
+      constraints: constraintList,
+      excelSeed: excelSeed
+    };
   }
 
   // ======================== ALLOCATION ALGORITHM ========================
   function runAllocationAlgorithm(data, seed) {
     var rng = createRNG(seed);
     var auditTrail = [];
-    var allocations = {};   // oldFlatNo -> { newFlatCode, wing, floor, unit, type }
+    var allocations = {};
+    var stepNum = 0;
+    var available = data.allNewFlats.slice();
 
-    // Step 1 — Build list of all 30 new flats
-    var available = [];
-    for (var f = 1; f <= 10; f++) {
-      available.push('A-' + pad2(f) + '-01');
-      available.push('B-' + pad2(f) + '-01');
-      available.push('B-' + pad2(f) + '-02');
+    function removeAvail(code) {
+      var idx = available.indexOf(code);
+      if (idx >= 0) available.splice(idx, 1);
     }
 
-    var usedPairFloors = [];
+    // Separate by type
+    var pairs = [], sameWings = [], floorPrefs = [];
+    for (var ci = 0; ci < data.constraints.length; ci++) {
+      var c = data.constraints[ci];
+      if (c.type === 'pair') pairs.push(c);
+      else if (c.type === 'same-wing') sameWings.push(c);
+      else if (c.type === 'floor-pref') floorPrefs.push(c);
+    }
 
-    // Steps 2 & 3 — Allocate each pair
-    for (var p = 0; p < data.pairs.length; p++) {
-      var pair = data.pairs[p];
+    // ---- PHASE 1: Pairs ----
+    var usedPairFloorKeys = [];
 
-      // Find Wing B floors where both units are still available
-      var eligible = [];
-      for (var fl = 1; fl <= 10; fl++) {
-        if (usedPairFloors.indexOf(fl) >= 0) continue;
-        var u1 = 'B-' + pad2(fl) + '-01';
-        var u2 = 'B-' + pad2(fl) + '-02';
-        if (available.indexOf(u1) >= 0 && available.indexOf(u2) >= 0) {
-          eligible.push(fl);
+    for (var pi = 0; pi < pairs.length; pi++) {
+      var pair = pairs[pi];
+
+      // Eligible wings
+      var eligWings;
+      if (pair.wing && pair.wing !== '') {
+        eligWings = [pair.wing];
+      } else {
+        eligWings = [];
+        for (var wn = 0; wn < data.wingNames.length; wn++) {
+          if (data.wingMaxUnits[data.wingNames[wn]] >= 2) eligWings.push(data.wingNames[wn]);
+        }
+      }
+      if (eligWings.length === 0) {
+        throw new Error('No wing with ≥2 units/floor for "' + pair.id + '".');
+      }
+
+      // Find (wing, floor) slots with 2 consecutive available units
+      var slots = [];
+      for (var ew = 0; ew < eligWings.length; ew++) {
+        var ewing = eligWings[ew];
+        var wfMap = data.newWingFloorUnits[ewing];
+        if (!wfMap) continue;
+        var wfFloors = Object.keys(wfMap).map(Number);
+        for (var ef = 0; ef < wfFloors.length; ef++) {
+          var efl = wfFloors[ef];
+          if (wfMap[efl] < 2) continue;
+          var floorKey = ewing + '-' + efl;
+          if (usedPairFloorKeys.indexOf(floorKey) >= 0) continue;
+
+          for (var eu = 1; eu < wfMap[efl]; eu++) {
+            var ec1 = makeFlatCode(ewing, efl, eu);
+            var ec2 = makeFlatCode(ewing, efl, eu + 1);
+            if (available.indexOf(ec1) >= 0 && available.indexOf(ec2) >= 0) {
+              slots.push({ wing: ewing, floor: efl, code1: ec1, code2: ec2, unit1: eu, unit2: eu + 1 });
+            }
+          }
         }
       }
 
-      if (eligible.length === 0) {
-        throw new Error('No eligible Wing B floor for Pair ' + pair.pairId + '.');
+      if (slots.length === 0) {
+        throw new Error('No floor with 2 consecutive available units for "' + pair.id + '".');
       }
 
-      var chosenFloor = rng.pick(eligible);
-      usedPairFloors.push(chosenFloor);
+      var chosen = rng.pick(slots);
+      usedPairFloorKeys.push(chosen.wing + '-' + chosen.floor);
 
-      var code1 = 'B-' + pad2(chosenFloor) + '-01';
-      var code2 = 'B-' + pad2(chosenFloor) + '-02';
+      allocations[pair.flats[0]] = {
+        newFlatCode: chosen.code1, wing: chosen.wing, floor: chosen.floor,
+        unit: chosen.unit1, type: 'Paired (' + pair.id + ')'
+      };
+      allocations[pair.flats[1]] = {
+        newFlatCode: chosen.code2, wing: chosen.wing, floor: chosen.floor,
+        unit: chosen.unit2, type: 'Paired (' + pair.id + ')'
+      };
+      removeAvail(chosen.code1);
+      removeAvail(chosen.code2);
 
-      allocations[pair.flat1] = { newFlatCode: code1, wing: 'B', floor: chosenFloor, unit: 1, type: 'Paired' };
-      allocations[pair.flat2] = { newFlatCode: code2, wing: 'B', floor: chosenFloor, unit: 2, type: 'Paired' };
-
-      available.splice(available.indexOf(code1), 1);
-      available.splice(available.indexOf(code2), 1);
-
-      var stepBase = p * 2 + 1;
+      stepNum++;
       auditTrail.push({
-        step: stepBase, type: 'Paired', oldFlatNo: pair.flat1, newFlatCode: code1,
-        notes: 'Pair ' + pair.pairId + ': Floor ' + chosenFloor + ' Unit 01 (from ' + eligible.length + ' eligible floors)'
+        step: stepNum, type: 'Paired', oldFlatNo: pair.flats[0], newFlatCode: chosen.code1,
+        notes: pair.id + ': Wing ' + chosen.wing + ' Floor ' + chosen.floor +
+               ' Unit ' + pad2(chosen.unit1) + ' (from ' + slots.length + ' eligible slot(s))'
       });
+      stepNum++;
       auditTrail.push({
-        step: stepBase + 1, type: 'Paired', oldFlatNo: pair.flat2, newFlatCode: code2,
-        notes: 'Pair ' + pair.pairId + ': Floor ' + chosenFloor + ' Unit 02'
+        step: stepNum, type: 'Paired', oldFlatNo: pair.flats[1], newFlatCode: chosen.code2,
+        notes: pair.id + ': Wing ' + chosen.wing + ' Floor ' + chosen.floor + ' Unit ' + pad2(chosen.unit2)
       });
     }
 
-    // Step 4 — Remaining flats
-    var assignedSet = {};
-    for (var key in allocations) assignedSet[key] = true;
-
-    var remaining = [];
-    for (var r = 0; r < data.flats.length; r++) {
-      if (!assignedSet[data.flats[r].oldFlatNo]) {
-        remaining.push(data.flats[r].oldFlatNo);
+    // ---- PHASE 2: Same-wing ----
+    for (var si = 0; si < sameWings.length; si++) {
+      var swc = sameWings[si];
+      var swFlats = [];
+      for (var swi = 0; swi < swc.flats.length; swi++) {
+        if (!allocations[swc.flats[swi]]) swFlats.push(swc.flats[swi]);
       }
+      if (swFlats.length === 0) continue;
+
+      var targetWing;
+      if (swc.wing && swc.wing !== '') {
+        targetWing = swc.wing;
+      } else {
+        var wcounts = {};
+        for (var aw = 0; aw < available.length; aw++) {
+          var awW = parseCode(available[aw]).wing;
+          wcounts[awW] = (wcounts[awW] || 0) + 1;
+        }
+        var elig = [];
+        var wks = Object.keys(wcounts);
+        for (var wk = 0; wk < wks.length; wk++) {
+          if (wcounts[wks[wk]] >= swFlats.length) elig.push(wks[wk]);
+        }
+        if (elig.length === 0) {
+          throw new Error('No wing has ' + swFlats.length + ' available flats for "' + swc.id + '".');
+        }
+        targetWing = rng.pick(elig);
+      }
+
+      var wingAvail = [];
+      for (var wa = 0; wa < available.length; wa++) {
+        if (parseCode(available[wa]).wing === targetWing) wingAvail.push(available[wa]);
+      }
+      if (wingAvail.length < swFlats.length) {
+        throw new Error('Wing ' + targetWing + ' has ' + wingAvail.length + ' available but "' + swc.id + '" needs ' + swFlats.length + '.');
+      }
+
+      wingAvail = rng.shuffle(wingAvail);
+      for (var sf = 0; sf < swFlats.length; sf++) {
+        var swCode = wingAvail[sf];
+        var swP = parseCode(swCode);
+        allocations[swFlats[sf]] = {
+          newFlatCode: swCode, wing: swP.wing, floor: swP.floor,
+          unit: swP.unit, type: 'Same-wing (' + swc.id + ')'
+        };
+        removeAvail(swCode);
+        stepNum++;
+        auditTrail.push({
+          step: stepNum, type: 'Same-wing', oldFlatNo: swFlats[sf], newFlatCode: swCode,
+          notes: swc.id + ': Wing ' + targetWing
+        });
+      }
+    }
+
+    // ---- PHASE 3: Floor preferences ----
+    for (var fp = 0; fp < floorPrefs.length; fp++) {
+      var fpc = floorPrefs[fp];
+      for (var ff = 0; ff < fpc.flats.length; ff++) {
+        if (allocations[fpc.flats[ff]]) continue;
+
+        var flAvail = [];
+        for (var fa = 0; fa < available.length; fa++) {
+          var faP = parseCode(available[fa]);
+          if (faP.floor !== fpc.floor) continue;
+          if (fpc.wing && fpc.wing !== '' && faP.wing !== fpc.wing) continue;
+          flAvail.push(available[fa]);
+        }
+        if (flAvail.length === 0) {
+          throw new Error('No available flat on floor ' + fpc.floor +
+            (fpc.wing ? ' wing ' + fpc.wing : '') + ' for "' + fpc.id + '" (flat ' + fpc.flats[ff] + ').');
+        }
+
+        var fpPick = rng.pick(flAvail);
+        var fpP = parseCode(fpPick);
+        allocations[fpc.flats[ff]] = {
+          newFlatCode: fpPick, wing: fpP.wing, floor: fpP.floor,
+          unit: fpP.unit, type: 'Floor-pref (' + fpc.id + ')'
+        };
+        removeAvail(fpPick);
+        stepNum++;
+        auditTrail.push({
+          step: stepNum, type: 'Floor-pref', oldFlatNo: fpc.flats[ff], newFlatCode: fpPick,
+          notes: fpc.id + ': Floor ' + fpc.floor + ' (from ' + flAvail.length + ' available)'
+        });
+      }
+    }
+
+    // ---- PHASE 4: Random ----
+    var assignedSet = {};
+    for (var ak in allocations) assignedSet[ak] = true;
+    var remaining = [];
+    for (var ri = 0; ri < data.flats.length; ri++) {
+      if (!assignedSet[data.flats[ri].oldFlatNo]) remaining.push(data.flats[ri].oldFlatNo);
     }
 
     remaining = rng.shuffle(remaining);
-
-    for (var s = 0; s < remaining.length; s++) {
-      var oldNo = remaining[s];
-      var idx = rng.randomInt(0, available.length - 1);
-      var picked = available[idx];
-      available.splice(idx, 1);
-
-      var parts = picked.split('-');
-      allocations[oldNo] = {
-        newFlatCode: picked,
-        wing: parts[0],
-        floor: parseInt(parts[1], 10),
-        unit: parseInt(parts[2], 10),
-        type: 'Random'
+    for (var rm = 0; rm < remaining.length; rm++) {
+      if (available.length === 0) {
+        throw new Error('No available new flats for old flat ' + remaining[rm] + '.');
+      }
+      var rmIdx = rng.randomInt(0, available.length - 1);
+      var rmPick = available[rmIdx];
+      available.splice(rmIdx, 1);
+      var rmP = parseCode(rmPick);
+      allocations[remaining[rm]] = {
+        newFlatCode: rmPick, wing: rmP.wing, floor: rmP.floor,
+        unit: rmP.unit, type: 'Random'
       };
-
+      stepNum++;
       auditTrail.push({
-        step: data.pairs.length * 2 + s + 1,
-        type: 'Random', oldFlatNo: oldNo, newFlatCode: picked,
-        notes: 'Random allocation (' + (available.length + 1) + ' flats were available)'
+        step: stepNum, type: 'Random', oldFlatNo: remaining[rm], newFlatCode: rmPick,
+        notes: 'Random (' + (available.length + 1) + ' were available)'
       });
     }
 
-    // Step 5 — Validate
-    var validation = validateAllocation(allocations, data.pairs);
+    var unoccupied = available.slice();
+    var validation = validateAllocation(data, allocations, pairs, sameWings, floorPrefs);
 
     return {
       allocations: allocations,
       auditTrail: auditTrail,
       validation: validation,
       seed: seed,
-      pairs: data.pairs
+      constraints: data.constraints,
+      unoccupied: unoccupied
     };
   }
 
   // ======================== VALIDATION ========================
-  function validateAllocation(allocations, pairs) {
+  function validateAllocation(data, allocations, pairs, sameWings, floorPrefs) {
     var checks = [];
     var allNew = [];
     for (var key in allocations) allNew.push(allocations[key].newFlatCode);
 
-    var pairFloors = [];
+    // Pair checks
+    var pairFloorKeys = [];
+    for (var pi = 0; pi < pairs.length; pi++) {
+      var pair = pairs[pi];
+      var a1 = allocations[pair.flats[0]];
+      var a2 = allocations[pair.flats[1]];
+      var ok = a1 && a2 && a1.wing === a2.wing && a1.floor === a2.floor &&
+               Math.abs(a1.unit - a2.unit) === 1;
+      if (pair.wing && pair.wing !== '') ok = ok && a1 && a1.wing === pair.wing;
 
-    for (var p = 0; p < pairs.length; p++) {
-      var pair = pairs[p];
-      var a1 = allocations[pair.flat1];
-      var a2 = allocations[pair.flat2];
-      var ok = a1 && a2 &&
-        a1.wing === 'B' && a2.wing === 'B' &&
-        a1.floor === a2.floor &&
-        a1.unit === 1 && a2.unit === 2;
-
-      pairFloors.push(a1 ? a1.floor : null);
-
+      pairFloorKeys.push(a1 ? a1.wing + '-' + a1.floor : 'N/A');
       checks.push({
-        constraint: 'Pair ' + pair.pairId + ' (Flats ' + pair.flat1 + ' & ' + pair.flat2 + '): same Wing B floor, units 01 & 02',
-        status: ok,
+        constraint: pair.id + ' (Flats ' + pair.flats.join(' & ') + '): same floor, adjacent' +
+          (pair.wing ? ' in Wing ' + pair.wing : ''),
+        status: !!ok,
         details: ok
-          ? 'Both on Wing B Floor ' + a1.floor + ' (units 01 & 02)'
-          : 'FAILED - not on same Wing B floor or wrong units'
+          ? 'Wing ' + a1.wing + ' Floor ' + a1.floor + ' Units ' + pad2(a1.unit) + ' & ' + pad2(a2.unit)
+          : 'FAILED'
       });
     }
 
-    // Pair floors must differ
     if (pairs.length >= 2) {
-      var unique = true;
-      for (var i = 0; i < pairFloors.length; i++) {
-        for (var j = i + 1; j < pairFloors.length; j++) {
-          if (pairFloors[i] === pairFloors[j]) unique = false;
+      var uniq = true;
+      for (var i = 0; i < pairFloorKeys.length; i++) {
+        for (var j = i + 1; j < pairFloorKeys.length; j++) {
+          if (pairFloorKeys[i] === pairFloorKeys[j]) uniq = false;
         }
       }
       checks.push({
-        constraint: 'Paired flats on different floors',
-        status: unique,
-        details: unique
-          ? 'Pair floors: ' + pairFloors.join(', ')
-          : 'FAILED - two pairs share the same floor'
+        constraint: 'All pairs on different wing-floor combinations',
+        status: uniq,
+        details: uniq ? 'Keys: ' + pairFloorKeys.join(', ') : 'FAILED — two pairs share a wing-floor'
       });
     }
 
-    // No duplicate new flats
+    // Same-wing checks
+    for (var si = 0; si < sameWings.length; si++) {
+      var swc = sameWings[si];
+      var swWings = [];
+      for (var sf = 0; sf < swc.flats.length; sf++) {
+        var swa = allocations[swc.flats[sf]];
+        if (swa) swWings.push(swa.wing);
+      }
+      var allSame = swWings.length > 0 && swWings.every(function(w) { return w === swWings[0]; });
+      var swOk = allSame && (!swc.wing || swc.wing === '' || swWings[0] === swc.wing);
+      checks.push({
+        constraint: swc.id + ' (Flats ' + swc.flats.join(', ') + '): same wing' +
+          (swc.wing ? ' (' + swc.wing + ')' : ''),
+        status: !!swOk,
+        details: swOk ? 'All in Wing ' + swWings[0] : 'FAILED'
+      });
+    }
+
+    // Floor-pref checks
+    for (var fp = 0; fp < floorPrefs.length; fp++) {
+      var fpc = floorPrefs[fp];
+      for (var ff = 0; ff < fpc.flats.length; ff++) {
+        var fpa = allocations[fpc.flats[ff]];
+        var fpOk = fpa && fpa.floor === fpc.floor;
+        if (fpc.wing && fpc.wing !== '') fpOk = fpOk && fpa && fpa.wing === fpc.wing;
+        checks.push({
+          constraint: fpc.id + ' (Flat ' + fpc.flats[ff] + '): floor ' + fpc.floor +
+            (fpc.wing ? ', Wing ' + fpc.wing : ''),
+          status: !!fpOk,
+          details: fpOk ? 'Wing ' + fpa.wing + ' Floor ' + fpa.floor : 'FAILED'
+        });
+      }
+    }
+
+    // Global checks
     var newSet = new Set(allNew);
-    var noDups = newSet.size === allNew.length;
     checks.push({
       constraint: 'No duplicate new flat assignments',
-      status: noDups,
-      details: noDups
-        ? 'All ' + allNew.length + ' assignments unique'
-        : 'FAILED - ' + (allNew.length - newSet.size) + ' duplicate(s)'
+      status: newSet.size === allNew.length,
+      details: newSet.size === allNew.length
+        ? 'All ' + allNew.length + ' unique'
+        : 'FAILED — ' + (allNew.length - newSet.size) + ' duplicate(s)'
     });
 
-    // All 30 old flats
     var oldCount = Object.keys(allocations).length;
     checks.push({
-      constraint: 'All 30 old flats assigned',
-      status: oldCount === 30,
-      details: oldCount === 30
-        ? '30/30 old flats assigned'
-        : 'FAILED - ' + oldCount + '/30 assigned'
+      constraint: 'All ' + data.totalOldFlats + ' old flats assigned',
+      status: oldCount === data.totalOldFlats,
+      details: oldCount + '/' + data.totalOldFlats + ' assigned'
     });
 
-    // All 30 new flats
+    var unoccCount = data.totalNewFlats - oldCount;
     checks.push({
-      constraint: 'All 30 new flats used',
-      status: newSet.size === 30,
-      details: newSet.size === 30
-        ? '30/30 new flats allocated'
-        : 'FAILED - ' + newSet.size + '/30 used'
+      constraint: 'New flat occupancy',
+      status: true,
+      details: oldCount + ' occupied, ' + unoccCount + ' unoccupied (of ' + data.totalNewFlats + ' total)'
     });
 
     return checks;
   }
 
   // ======================== RENDER RESULTS ========================
-  function findOldFlatByCode(allocations, code) {
-    for (var key in allocations) {
-      if (allocations[key].newFlatCode === code) return parseInt(key, 10);
+  function buildConstraintMap() {
+    var map = {};
+    for (var c = 0; c < parsedData.constraints.length; c++) {
+      var con = parsedData.constraints[c];
+      for (var f = 0; f < con.flats.length; f++) {
+        map[con.flats[f]] = con.id;
+      }
     }
-    return null;
+    return map;
   }
 
   function showResults(result) {
     resultsSection.classList.remove('hidden');
     seedValueEl.textContent = result.seed;
+    var constraintMap = buildConstraintMap();
 
-    // --- Validation list ---
+    var flatLookup = {};
+    for (var f = 0; f < parsedData.flats.length; f++) {
+      flatLookup[parsedData.flats[f].oldFlatNo] = parsedData.flats[f];
+    }
+
+    // Validation list
     validationList.innerHTML = '';
     var allPass = true;
-    for (var i = 0; i < result.validation.length; i++) {
-      var v = result.validation[i];
+    for (var vi = 0; vi < result.validation.length; vi++) {
+      var v = result.validation[vi];
       if (!v.status) allPass = false;
       var li = document.createElement('li');
       var icon = document.createElement('span');
       icon.className = v.status ? 'check-pass' : 'check-fail';
       icon.textContent = v.status ? 'PASS' : 'FAIL';
       var text = document.createElement('span');
-      text.textContent = v.constraint + ' - ' + v.details;
+      text.textContent = v.constraint + ' — ' + v.details;
       li.appendChild(icon);
       li.appendChild(text);
       validationList.appendChild(li);
     }
 
-    // --- Pair lookup ---
-    var pairFlatMap = {};
-    for (var p = 0; p < result.pairs.length; p++) {
-      pairFlatMap[result.pairs[p].flat1] = result.pairs[p].pairId;
-      pairFlatMap[result.pairs[p].flat2] = result.pairs[p].pairId;
-    }
-
-    var flatLookup = {};
-    for (var j = 0; j < parsedData.flats.length; j++) {
-      flatLookup[parsedData.flats[j].oldFlatNo] = parsedData.flats[j];
-    }
-
-    // --- Allocation table ---
+    // Allocation table
     allocTbody.innerHTML = '';
     var sorted = Object.keys(result.allocations).map(Number).sort(function(a, b) { return a - b; });
-    for (var k = 0; k < sorted.length; k++) {
-      var oldNo = sorted[k];
+    for (var ai = 0; ai < sorted.length; ai++) {
+      var oldNo = sorted[ai];
       var a = result.allocations[oldNo];
       var flat = flatLookup[oldNo] || {};
       var tr = document.createElement('tr');
-      if (pairFlatMap[oldNo]) tr.className = 'pair-' + pairFlatMap[oldNo];
+      if (constraintMap[oldNo]) tr.className = 'constrained';
       tr.innerHTML =
         '<td>' + oldNo + '</td>' +
         '<td>' + escapeHtml(flat.ownerName || '') + '</td>' +
@@ -434,37 +698,81 @@ var __flatAppFn = function() {
         '<td>' + a.wing + '</td>' +
         '<td>' + a.floor + '</td>' +
         '<td>' + pad2(a.unit) + '</td>' +
-        '<td>' + a.type + '</td>';
+        '<td>' + escapeHtml(a.type) + '</td>';
       allocTbody.appendChild(tr);
     }
 
-    // --- Building layout (floor 10 → 1) ---
+    // Dynamic building layout
+    var wings = parsedData.wingNames;
+    var floors = parsedData.allFloors.slice().sort(function(a, b) { return b - a; });
+
+    // Build header
+    layoutThead.innerHTML = '';
+    var headerRow = document.createElement('tr');
+    var thFloor = document.createElement('th');
+    thFloor.textContent = 'Floor';
+    headerRow.appendChild(thFloor);
+
+    var layoutColumns = [];
+    for (var wi = 0; wi < wings.length; wi++) {
+      var w = wings[wi];
+      var maxU = parsedData.wingMaxUnits[w];
+      for (var ui = 1; ui <= maxU; ui++) {
+        layoutColumns.push({ wing: w, unit: ui });
+        var th = document.createElement('th');
+        th.textContent = 'Wing ' + w + (maxU > 1 ? ', Unit ' + pad2(ui) : '');
+        headerRow.appendChild(th);
+      }
+    }
+    layoutThead.appendChild(headerRow);
+
+    // Reverse lookup
+    var codeToOld = {};
+    for (var rk in result.allocations) {
+      codeToOld[result.allocations[rk].newFlatCode] = parseInt(rk, 10);
+    }
+
+    // Build body
     layoutTbody.innerHTML = '';
-    for (var fl = 10; fl >= 1; fl--) {
-      var wingA  = findOldFlatByCode(result.allocations, 'A-' + pad2(fl) + '-01');
-      var wingB1 = findOldFlatByCode(result.allocations, 'B-' + pad2(fl) + '-01');
-      var wingB2 = findOldFlatByCode(result.allocations, 'B-' + pad2(fl) + '-02');
-
-      var clsA  = wingA  && pairFlatMap[wingA]  ? 'pair-' + pairFlatMap[wingA]  : '';
-      var clsB1 = wingB1 && pairFlatMap[wingB1] ? 'pair-' + pairFlatMap[wingB1] : '';
-      var clsB2 = wingB2 && pairFlatMap[wingB2] ? 'pair-' + pairFlatMap[wingB2] : '';
-
+    for (var fi = 0; fi < floors.length; fi++) {
+      var fl = floors[fi];
       var row = document.createElement('tr');
-      row.innerHTML =
-        '<td class="floor-num">' + fl + '</td>' +
-        '<td class="' + clsA  + '">' + (wingA  != null ? 'Flat ' + wingA  : '-') + '</td>' +
-        '<td class="' + clsB1 + '">' + (wingB1 != null ? 'Flat ' + wingB1 : '-') + '</td>' +
-        '<td class="' + clsB2 + '">' + (wingB2 != null ? 'Flat ' + wingB2 : '-') + '</td>';
+      var tdFloor = document.createElement('td');
+      tdFloor.className = 'floor-num';
+      tdFloor.textContent = fl;
+      row.appendChild(tdFloor);
+
+      for (var lc = 0; lc < layoutColumns.length; lc++) {
+        var col = layoutColumns[lc];
+        var td = document.createElement('td');
+        var wfUnits = parsedData.newWingFloorUnits[col.wing];
+        var floorUnits = wfUnits ? wfUnits[fl] : 0;
+
+        if (!floorUnits || col.unit > floorUnits) {
+          td.textContent = '-';
+          td.className = 'no-unit';
+        } else {
+          var code = makeFlatCode(col.wing, fl, col.unit);
+          var oldFlat = codeToOld[code];
+          if (oldFlat != null) {
+            td.textContent = 'Flat ' + oldFlat;
+            if (constraintMap[oldFlat]) td.className = 'constrained';
+          } else {
+            td.textContent = 'Unoccupied';
+            td.className = 'unoccupied';
+          }
+        }
+        row.appendChild(td);
+      }
       layoutTbody.appendChild(row);
     }
 
     showStatus(runStatus,
       allPass
-        ? 'Allocation complete - all checks passed.'
-        : 'Allocation complete - some checks FAILED.',
+        ? 'Allocation complete — all checks passed.'
+        : 'Allocation complete — some checks FAILED.',
       allPass ? 'success' : 'error');
 
-    // Scroll results into view
     document.getElementById('seed-display').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
@@ -478,17 +786,16 @@ var __flatAppFn = function() {
     for (var i = 0; i < parsedData.flats.length; i++) {
       flatLookup[parsedData.flats[i].oldFlatNo] = parsedData.flats[i];
     }
-
     var sorted = Object.keys(r.allocations).map(Number).sort(function(a, b) { return a - b; });
 
     // Sheet 1 — Allocation
-    var s1 = [['Old Flat No.', 'Owner Name', 'New Flat Code', 'Wing', 'Floor', 'Unit', 'Allocation Type', 'Seed']];
+    var s1 = [['Old Flat No.', 'Owner Name', 'New Flat Code', 'Wing', 'Floor', 'Unit', 'Allocation Type', 'Constraint', 'Seed']];
     for (var j = 0; j < sorted.length; j++) {
       var o = sorted[j], a = r.allocations[o], fl = flatLookup[o] || {};
-      s1.push([o, fl.ownerName || '', a.newFlatCode, a.wing, a.floor, a.unit, a.type, r.seed]);
+      s1.push([o, fl.ownerName || '', a.newFlatCode, a.wing, a.floor, a.unit, a.type, fl.constraintId || '', r.seed]);
     }
     var ws1 = XLSX.utils.aoa_to_sheet(s1);
-    ws1['!cols'] = [{wch:12},{wch:22},{wch:15},{wch:8},{wch:8},{wch:8},{wch:16},{wch:14}];
+    ws1['!cols'] = [{wch:12},{wch:22},{wch:15},{wch:8},{wch:8},{wch:8},{wch:24},{wch:14},{wch:14}];
     XLSX.utils.book_append_sheet(wb, ws1, 'Allocation');
 
     // Sheet 2 — Validation
@@ -501,38 +808,75 @@ var __flatAppFn = function() {
     ws2['!cols'] = [{wch:55},{wch:10},{wch:50}];
     XLSX.utils.book_append_sheet(wb, ws2, 'Validation');
 
-    // Sheet 3 — Building Layout
-    var s3 = [['Floor', 'Wing A (Old Flat No.)', 'Wing B Unit 1 (Old Flat No.)', 'Wing B Unit 2 (Old Flat No.)']];
-    for (var f = 10; f >= 1; f--) {
-      var wA  = findOldFlatByCode(r.allocations, 'A-' + pad2(f) + '-01');
-      var wB1 = findOldFlatByCode(r.allocations, 'B-' + pad2(f) + '-01');
-      var wB2 = findOldFlatByCode(r.allocations, 'B-' + pad2(f) + '-02');
-      s3.push([f, wA != null ? wA : '', wB1 != null ? wB1 : '', wB2 != null ? wB2 : '']);
+    // Sheet 3 — Building Layout (dynamic)
+    var wings = parsedData.wingNames;
+    var floors = parsedData.allFloors.slice().sort(function(a, b) { return b - a; });
+    var lCols = [];
+    var lHeader = ['Floor'];
+    for (var lw = 0; lw < wings.length; lw++) {
+      var w = wings[lw];
+      var maxU = parsedData.wingMaxUnits[w];
+      for (var lu = 1; lu <= maxU; lu++) {
+        lCols.push({ wing: w, unit: lu });
+        lHeader.push('Wing ' + w + (maxU > 1 ? ' Unit ' + pad2(lu) : '') + ' (Old Flat)');
+      }
+    }
+    var s3 = [lHeader];
+    var codeToOld = {};
+    for (var rk in r.allocations) {
+      codeToOld[r.allocations[rk].newFlatCode] = parseInt(rk, 10);
+    }
+    for (var lf = 0; lf < floors.length; lf++) {
+      var lfn = floors[lf];
+      var lrow = [lfn];
+      for (var lci = 0; lci < lCols.length; lci++) {
+        var lc = lCols[lci];
+        var wfU = parsedData.newWingFloorUnits[lc.wing];
+        var fUnits = wfU ? wfU[lfn] : 0;
+        if (!fUnits || lc.unit > fUnits) {
+          lrow.push('');
+        } else {
+          var code = makeFlatCode(lc.wing, lfn, lc.unit);
+          var oldF = codeToOld[code];
+          lrow.push(oldF != null ? oldF : 'Unoccupied');
+        }
+      }
+      s3.push(lrow);
     }
     var ws3 = XLSX.utils.aoa_to_sheet(s3);
-    ws3['!cols'] = [{wch:8},{wch:24},{wch:28},{wch:28}];
+    var s3cols = [{wch:8}];
+    for (var sc = 0; sc < lCols.length; sc++) s3cols.push({wch:24});
+    ws3['!cols'] = s3cols;
     XLSX.utils.book_append_sheet(wb, ws3, 'Building Layout');
 
     // Sheet 4 — Audit Trail
-    var s4 = [['Step', 'Allocation Type', 'Old Flat No.', 'New Flat Code', 'Notes']];
+    var s4 = [['Step', 'Type', 'Old Flat No.', 'New Flat Code', 'Notes']];
     for (var t = 0; t < r.auditTrail.length; t++) {
       var at = r.auditTrail[t];
       s4.push([at.step, at.type, at.oldFlatNo, at.newFlatCode, at.notes]);
     }
     var ws4 = XLSX.utils.aoa_to_sheet(s4);
-    ws4['!cols'] = [{wch:8},{wch:16},{wch:14},{wch:15},{wch:55}];
+    ws4['!cols'] = [{wch:8},{wch:16},{wch:14},{wch:15},{wch:60}];
     XLSX.utils.book_append_sheet(wb, ws4, 'Audit Trail');
 
     // Sheet 5 — Metadata
     var allPass = r.validation.every(function(v) { return v.status; });
+    var cCounts = { pair: 0, 'same-wing': 0, 'floor-pref': 0 };
+    for (var mc = 0; mc < parsedData.constraints.length; mc++) {
+      cCounts[parsedData.constraints[mc].type]++;
+    }
     var s5 = [
       ['Key', 'Value'],
       ['Generation Timestamp', new Date().toISOString()],
       ['Random Seed', r.seed],
-      ['Total Flats', 30],
-      ['Paired Allocations', r.pairs.length * 2],
-      ['Random Allocations', 30 - r.pairs.length * 2],
-      ['Allocation Status', allPass ? 'All checks passed' : 'Some checks failed']
+      ['Old Building Flats', parsedData.totalOldFlats],
+      ['New Building Flats', parsedData.totalNewFlats],
+      ['Wings', parsedData.wingNames.join(', ')],
+      ['Pair Constraints', cCounts.pair],
+      ['Same-wing Constraints', cCounts['same-wing']],
+      ['Floor-pref Constraints', cCounts['floor-pref']],
+      ['Unoccupied New Flats', r.unoccupied.length],
+      ['Status', allPass ? 'All checks passed' : 'Some checks failed']
     ];
     var ws5 = XLSX.utils.aoa_to_sheet(s5);
     ws5['!cols'] = [{wch:25},{wch:40}];
@@ -544,14 +888,12 @@ var __flatAppFn = function() {
   // ======================== EVENT HANDLERS ========================
   runBtn.addEventListener('click', function() {
     if (!parsedData) return;
-
     var seed;
     if (parsedData.excelSeed != null) {
       seed = parsedData.excelSeed;
     } else {
       seed = Math.floor(Math.random() * 2147483647) + 1;
     }
-
     try {
       allocationResult = runAllocationAlgorithm(parsedData, seed);
       showResults(allocationResult);

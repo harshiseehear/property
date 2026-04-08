@@ -81,7 +81,7 @@
       <div class="card">
         <h2>Allocation Results</h2>
         <div class="legend">
-          <span><span class="legend-swatch" style="background:#e0e0e0"></span> Paired</span>
+          <span><span class="legend-swatch constrained"></span> Constrained</span>
         </div>
         <div class="table-wrap table-wrap-spaced">
           <table id="allocation-table">
@@ -97,18 +97,14 @@
       </div>
 
       <div class="card">
-        <h2>Building Layout</h2>
+        <h2>New Building Layout</h2>
         <div class="legend">
-          <span><span class="legend-swatch" style="background:#e0e0e0"></span> Paired</span>
+          <span><span class="legend-swatch constrained"></span> Constrained</span>
+          <span><span class="legend-swatch unoccupied"></span> Unoccupied</span>
         </div>
         <div class="table-wrap table-wrap-spaced">
           <table id="layout-table" class="layout-table">
-            <thead>
-              <tr>
-                <th>Floor</th><th>Wing A</th>
-                <th>Wing B, Unit 01</th><th>Wing B, Unit 02</th>
-              </tr>
-            </thead>
+            <thead id="layout-thead"></thead>
             <tbody></tbody>
           </table>
         </div>
