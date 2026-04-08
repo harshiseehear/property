@@ -111,14 +111,13 @@ var __flatAppFn = function() {
         var wb = XLSX.read(data, { type: 'array' });
         parsedData = parseWorkbook(wb);
 
-        var counts = { pair: 0, 'same-wing': 0, 'floor-pref': 0 };
+        var counts = { pair: 0, pref: 0 };
         for (var c = 0; c < parsedData.constraints.length; c++) {
           counts[parsedData.constraints[c].type]++;
         }
         var parts = [];
         if (counts.pair > 0) parts.push(counts.pair + ' pair(s)');
-        if (counts['same-wing'] > 0) parts.push(counts['same-wing'] + ' same-wing');
-        if (counts['floor-pref'] > 0) parts.push(counts['floor-pref'] + ' floor-pref');
+        if (counts.pref > 0) parts.push(counts.pref + ' pref(s)');
 
         fileInfo.innerHTML =
           '<strong>' + escapeHtml(file.name) + '</strong><br>' +
@@ -244,8 +243,8 @@ var __flatAppFn = function() {
         var cWing = (crow[2] || '').toString().trim();
         var cFloor = (crow[3] != null && crow[3] !== '') ? parseInt(crow[3], 10) : null;
 
-        if (['pair', 'same-wing', 'floor-pref'].indexOf(cType) < 0) {
-          throw new Error('Constraint "' + cId + '": unknown type "' + cType + '". Valid: pair, same-wing, floor-pref.');
+        if (['pair', 'pref'].indexOf(cType) < 0) {
+          throw new Error('Constraint "' + cId + '": unknown type "' + cType + '". Valid: pair, pref.');
         }
         if (cWing && !wingNameSet[cWing]) {
           throw new Error('Constraint "' + cId + '" references wing "' + cWing + '" not in new building.');
@@ -277,14 +276,11 @@ var __flatAppFn = function() {
       if (co.type === 'pair' && co.flats.length !== 2) {
         throw new Error('"' + co.id + '" (pair) needs exactly 2 flats, found ' + co.flats.length + '.');
       }
-      if (co.type === 'same-wing' && co.flats.length < 2) {
-        throw new Error('"' + co.id + '" (same-wing) needs ≥2 flats, found ' + co.flats.length + '.');
+      if (co.type === 'pref' && co.flats.length < 1) {
+        throw new Error('"' + co.id + '" (pref) needs ≥1 flat, found ' + co.flats.length + '.');
       }
-      if (co.type === 'floor-pref' && co.flats.length < 1) {
-        throw new Error('"' + co.id + '" (floor-pref) needs ≥1 flat, found ' + co.flats.length + '.');
-      }
-      if (co.type === 'floor-pref' && (co.floor == null || isNaN(co.floor))) {
-        throw new Error('"' + co.id + '" (floor-pref) must specify a floor number.');
+      if (co.type === 'pref' && !co.wing && co.floor == null) {
+        throw new Error('"' + co.id + '" (pref) must specify at least a wing or floor.');
       }
       co.flats.sort(function(a, b) { return a - b; });
       constraintList.push(co);
@@ -331,12 +327,11 @@ var __flatAppFn = function() {
     }
 
     // Separate by type
-    var pairs = [], sameWings = [], floorPrefs = [];
+    var pairs = [], prefs = [];
     for (var ci = 0; ci < data.constraints.length; ci++) {
       var c = data.constraints[ci];
       if (c.type === 'pair') pairs.push(c);
-      else if (c.type === 'same-wing') sameWings.push(c);
-      else if (c.type === 'floor-pref') floorPrefs.push(c);
+      else if (c.type === 'pref') prefs.push(c);
     }
 
     // ---- PHASE 1: Pairs ----
@@ -369,6 +364,7 @@ var __flatAppFn = function() {
         for (var ef = 0; ef < wfFloors.length; ef++) {
           var efl = wfFloors[ef];
           if (wfMap[efl] < 2) continue;
+          if (pair.floor != null && efl !== pair.floor) continue;
           var floorKey = ewing + '-' + efl;
           if (usedPairFloorKeys.indexOf(floorKey) >= 0) continue;
 
@@ -413,89 +409,42 @@ var __flatAppFn = function() {
       });
     }
 
-    // ---- PHASE 2: Same-wing ----
-    for (var si = 0; si < sameWings.length; si++) {
-      var swc = sameWings[si];
-      var swFlats = [];
-      for (var swi = 0; swi < swc.flats.length; swi++) {
-        if (!allocations[swc.flats[swi]]) swFlats.push(swc.flats[swi]);
-      }
-      if (swFlats.length === 0) continue;
+    // ---- PHASE 2: Preferences (wing and/or floor) ----
+    for (var pr = 0; pr < prefs.length; pr++) {
+      var prc = prefs[pr];
+      for (var pf = 0; pf < prc.flats.length; pf++) {
+        if (allocations[prc.flats[pf]]) continue;
 
-      var targetWing;
-      if (swc.wing && swc.wing !== '') {
-        targetWing = swc.wing;
-      } else {
-        var wcounts = {};
-        for (var aw = 0; aw < available.length; aw++) {
-          var awW = parseCode(available[aw]).wing;
-          wcounts[awW] = (wcounts[awW] || 0) + 1;
+        var prAvail = [];
+        for (var pa = 0; pa < available.length; pa++) {
+          var paP = parseCode(available[pa]);
+          if (prc.wing && prc.wing !== '' && paP.wing !== prc.wing) continue;
+          if (prc.floor != null && paP.floor !== prc.floor) continue;
+          prAvail.push(available[pa]);
         }
-        var elig = [];
-        var wks = Object.keys(wcounts);
-        for (var wk = 0; wk < wks.length; wk++) {
-          if (wcounts[wks[wk]] >= swFlats.length) elig.push(wks[wk]);
+        if (prAvail.length === 0) {
+          var prefDesc = [];
+          if (prc.wing) prefDesc.push('Wing ' + prc.wing);
+          if (prc.floor != null) prefDesc.push('Floor ' + prc.floor);
+          throw new Error('No available flat matching ' + prefDesc.join(', ') +
+            ' for "' + prc.id + '" (flat ' + prc.flats[pf] + ').');
         }
-        if (elig.length === 0) {
-          throw new Error('No wing has ' + swFlats.length + ' available flats for "' + swc.id + '".');
-        }
-        targetWing = rng.pick(elig);
-      }
 
-      var wingAvail = [];
-      for (var wa = 0; wa < available.length; wa++) {
-        if (parseCode(available[wa]).wing === targetWing) wingAvail.push(available[wa]);
-      }
-      if (wingAvail.length < swFlats.length) {
-        throw new Error('Wing ' + targetWing + ' has ' + wingAvail.length + ' available but "' + swc.id + '" needs ' + swFlats.length + '.');
-      }
-
-      wingAvail = rng.shuffle(wingAvail);
-      for (var sf = 0; sf < swFlats.length; sf++) {
-        var swCode = wingAvail[sf];
-        var swP = parseCode(swCode);
-        allocations[swFlats[sf]] = {
-          newFlatCode: swCode, wing: swP.wing, floor: swP.floor,
-          unit: swP.unit, type: 'Same-wing (' + swc.id + ')'
+        var prPick = rng.pick(prAvail);
+        var prP = parseCode(prPick);
+        allocations[prc.flats[pf]] = {
+          newFlatCode: prPick, wing: prP.wing, floor: prP.floor,
+          unit: prP.unit, type: 'Pref (' + prc.id + ')'
         };
-        removeAvail(swCode);
+        removeAvail(prPick);
         stepNum++;
+        var prefNotes = prc.id + ':';
+        if (prc.wing) prefNotes += ' Wing ' + prc.wing;
+        if (prc.floor != null) prefNotes += ' Floor ' + prc.floor;
+        prefNotes += ' (from ' + prAvail.length + ' available)';
         auditTrail.push({
-          step: stepNum, type: 'Same-wing', oldFlatNo: swFlats[sf], newFlatCode: swCode,
-          notes: swc.id + ': Wing ' + targetWing
-        });
-      }
-    }
-
-    // ---- PHASE 3: Floor preferences ----
-    for (var fp = 0; fp < floorPrefs.length; fp++) {
-      var fpc = floorPrefs[fp];
-      for (var ff = 0; ff < fpc.flats.length; ff++) {
-        if (allocations[fpc.flats[ff]]) continue;
-
-        var flAvail = [];
-        for (var fa = 0; fa < available.length; fa++) {
-          var faP = parseCode(available[fa]);
-          if (faP.floor !== fpc.floor) continue;
-          if (fpc.wing && fpc.wing !== '' && faP.wing !== fpc.wing) continue;
-          flAvail.push(available[fa]);
-        }
-        if (flAvail.length === 0) {
-          throw new Error('No available flat on floor ' + fpc.floor +
-            (fpc.wing ? ' wing ' + fpc.wing : '') + ' for "' + fpc.id + '" (flat ' + fpc.flats[ff] + ').');
-        }
-
-        var fpPick = rng.pick(flAvail);
-        var fpP = parseCode(fpPick);
-        allocations[fpc.flats[ff]] = {
-          newFlatCode: fpPick, wing: fpP.wing, floor: fpP.floor,
-          unit: fpP.unit, type: 'Floor-pref (' + fpc.id + ')'
-        };
-        removeAvail(fpPick);
-        stepNum++;
-        auditTrail.push({
-          step: stepNum, type: 'Floor-pref', oldFlatNo: fpc.flats[ff], newFlatCode: fpPick,
-          notes: fpc.id + ': Floor ' + fpc.floor + ' (from ' + flAvail.length + ' available)'
+          step: stepNum, type: 'Pref', oldFlatNo: prc.flats[pf], newFlatCode: prPick,
+          notes: prefNotes
         });
       }
     }
@@ -529,7 +478,7 @@ var __flatAppFn = function() {
     }
 
     var unoccupied = available.slice();
-    var validation = validateAllocation(data, allocations, pairs, sameWings, floorPrefs);
+    var validation = validateAllocation(data, allocations, pairs, prefs);
 
     return {
       allocations: allocations,
@@ -542,7 +491,7 @@ var __flatAppFn = function() {
   }
 
   // ======================== VALIDATION ========================
-  function validateAllocation(data, allocations, pairs, sameWings, floorPrefs) {
+  function validateAllocation(data, allocations, pairs, prefs) {
     var checks = [];
     var allNew = [];
     for (var key in allocations) allNew.push(allocations[key].newFlatCode);
@@ -556,11 +505,14 @@ var __flatAppFn = function() {
       var ok = a1 && a2 && a1.wing === a2.wing && a1.floor === a2.floor &&
                Math.abs(a1.unit - a2.unit) === 1;
       if (pair.wing && pair.wing !== '') ok = ok && a1 && a1.wing === pair.wing;
+      if (pair.floor != null) ok = ok && a1 && a1.floor === pair.floor;
 
       pairFloorKeys.push(a1 ? a1.wing + '-' + a1.floor : 'N/A');
+      var pairDesc = pair.id + ' (Flats ' + pair.flats.join(' & ') + '): same floor, adjacent';
+      if (pair.wing) pairDesc += ', Wing ' + pair.wing;
+      if (pair.floor != null) pairDesc += ', Floor ' + pair.floor;
       checks.push({
-        constraint: pair.id + ' (Flats ' + pair.flats.join(' & ') + '): same floor, adjacent' +
-          (pair.wing ? ' in Wing ' + pair.wing : ''),
+        constraint: pairDesc,
         status: !!ok,
         details: ok
           ? 'Wing ' + a1.wing + ' Floor ' + a1.floor + ' Units ' + pad2(a1.unit) + ' & ' + pad2(a2.unit)
@@ -582,36 +534,21 @@ var __flatAppFn = function() {
       });
     }
 
-    // Same-wing checks
-    for (var si = 0; si < sameWings.length; si++) {
-      var swc = sameWings[si];
-      var swWings = [];
-      for (var sf = 0; sf < swc.flats.length; sf++) {
-        var swa = allocations[swc.flats[sf]];
-        if (swa) swWings.push(swa.wing);
-      }
-      var allSame = swWings.length > 0 && swWings.every(function(w) { return w === swWings[0]; });
-      var swOk = allSame && (!swc.wing || swc.wing === '' || swWings[0] === swc.wing);
-      checks.push({
-        constraint: swc.id + ' (Flats ' + swc.flats.join(', ') + '): same wing' +
-          (swc.wing ? ' (' + swc.wing + ')' : ''),
-        status: !!swOk,
-        details: swOk ? 'All in Wing ' + swWings[0] : 'FAILED'
-      });
-    }
-
-    // Floor-pref checks
-    for (var fp = 0; fp < floorPrefs.length; fp++) {
-      var fpc = floorPrefs[fp];
-      for (var ff = 0; ff < fpc.flats.length; ff++) {
-        var fpa = allocations[fpc.flats[ff]];
-        var fpOk = fpa && fpa.floor === fpc.floor;
-        if (fpc.wing && fpc.wing !== '') fpOk = fpOk && fpa && fpa.wing === fpc.wing;
+    // Pref checks
+    for (var pr = 0; pr < prefs.length; pr++) {
+      var prc = prefs[pr];
+      for (var pf = 0; pf < prc.flats.length; pf++) {
+        var pra = allocations[prc.flats[pf]];
+        var prOk = !!pra;
+        if (prOk && prc.wing && prc.wing !== '') prOk = pra.wing === prc.wing;
+        if (prOk && prc.floor != null) prOk = pra.floor === prc.floor;
+        var prDesc = prc.id + ' (Flat ' + prc.flats[pf] + '):';
+        if (prc.wing) prDesc += ' Wing ' + prc.wing;
+        if (prc.floor != null) prDesc += ' Floor ' + prc.floor;
         checks.push({
-          constraint: fpc.id + ' (Flat ' + fpc.flats[ff] + '): floor ' + fpc.floor +
-            (fpc.wing ? ', Wing ' + fpc.wing : ''),
-          status: !!fpOk,
-          details: fpOk ? 'Wing ' + fpa.wing + ' Floor ' + fpa.floor : 'FAILED'
+          constraint: prDesc,
+          status: !!prOk,
+          details: prOk ? 'Wing ' + pra.wing + ' Floor ' + pra.floor : 'FAILED'
         });
       }
     }
@@ -861,7 +798,7 @@ var __flatAppFn = function() {
 
     // Sheet 5 — Metadata
     var allPass = r.validation.every(function(v) { return v.status; });
-    var cCounts = { pair: 0, 'same-wing': 0, 'floor-pref': 0 };
+    var cCounts = { pair: 0, pref: 0 };
     for (var mc = 0; mc < parsedData.constraints.length; mc++) {
       cCounts[parsedData.constraints[mc].type]++;
     }
@@ -873,8 +810,7 @@ var __flatAppFn = function() {
       ['New Building Flats', parsedData.totalNewFlats],
       ['Wings', parsedData.wingNames.join(', ')],
       ['Pair Constraints', cCounts.pair],
-      ['Same-wing Constraints', cCounts['same-wing']],
-      ['Floor-pref Constraints', cCounts['floor-pref']],
+      ['Pref Constraints', cCounts.pref],
       ['Unoccupied New Flats', r.unoccupied.length],
       ['Status', allPass ? 'All checks passed' : 'Some checks failed']
     ];
