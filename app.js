@@ -247,6 +247,9 @@ var __flatAppFn = function() {
         if (['pair', 'pref'].indexOf(cType) < 0) {
           throw new Error('Constraint "' + cId + '": unknown type "' + cType + '". Valid: pair, pref.');
         }
+        if (constraints[cId]) {
+          throw new Error('Duplicate constraint ID "' + cId + '" found at row ' + (ci + 1) + '. Each ID must appear only once.');
+        }
         if (cWing && !wingNameSet[cWing]) {
           throw new Error('Constraint "' + cId + '" references wing "' + cWing + '" not in new building.');
         }
@@ -334,6 +337,13 @@ var __flatAppFn = function() {
       if (c.type === 'pair') pairs.push(c);
       else if (c.type === 'pref') prefs.push(c);
     }
+
+    // Sort prefs by specificity: most specific first
+    prefs.sort(function(a, b) {
+      var sa = (a.wing ? 1 : 0) + (a.floor != null ? 1 : 0) + (a.unit != null ? 1 : 0);
+      var sb = (b.wing ? 1 : 0) + (b.floor != null ? 1 : 0) + (b.unit != null ? 1 : 0);
+      return sb - sa;
+    });
 
     // ---- PHASE 1: Pairs ----
     var usedPairFloorKeys = [];
