@@ -242,6 +242,7 @@ var __flatAppFn = function() {
         var cType = (crow[1] || '').toString().trim().toLowerCase();
         var cWing = (crow[2] || '').toString().trim();
         var cFloor = (crow[3] != null && crow[3] !== '') ? parseInt(crow[3], 10) : null;
+        var cUnit = (crow[4] != null && crow[4] !== '') ? parseInt(crow[4], 10) : null;
 
         if (['pair', 'pref'].indexOf(cType) < 0) {
           throw new Error('Constraint "' + cId + '": unknown type "' + cType + '". Valid: pair, pref.');
@@ -253,7 +254,7 @@ var __flatAppFn = function() {
           throw new Error('Constraint "' + cId + '" references floor ' + cFloor + ' not in new building.');
         }
 
-        constraints[cId] = { id: cId, type: cType, wing: cWing, floor: cFloor, flats: [] };
+        constraints[cId] = { id: cId, type: cType, wing: cWing, floor: cFloor, unit: cUnit, flats: [] };
       }
     }
 
@@ -279,8 +280,8 @@ var __flatAppFn = function() {
       if (co.type === 'pref' && co.flats.length < 1) {
         throw new Error('"' + co.id + '" (pref) needs ≥1 flat, found ' + co.flats.length + '.');
       }
-      if (co.type === 'pref' && !co.wing && co.floor == null) {
-        throw new Error('"' + co.id + '" (pref) must specify at least a wing or floor.');
+      if (co.type === 'pref' && !co.wing && co.floor == null && co.unit == null) {
+        throw new Error('"' + co.id + '" (pref) must specify at least a wing, floor, or unit.');
       }
       co.flats.sort(function(a, b) { return a - b; });
       constraintList.push(co);
@@ -420,12 +421,14 @@ var __flatAppFn = function() {
           var paP = parseCode(available[pa]);
           if (prc.wing && prc.wing !== '' && paP.wing !== prc.wing) continue;
           if (prc.floor != null && paP.floor !== prc.floor) continue;
+          if (prc.unit != null && paP.unit !== prc.unit) continue;
           prAvail.push(available[pa]);
         }
         if (prAvail.length === 0) {
           var prefDesc = [];
           if (prc.wing) prefDesc.push('Wing ' + prc.wing);
           if (prc.floor != null) prefDesc.push('Floor ' + prc.floor);
+          if (prc.unit != null) prefDesc.push('Unit ' + pad2(prc.unit));
           throw new Error('No available flat matching ' + prefDesc.join(', ') +
             ' for "' + prc.id + '" (flat ' + prc.flats[pf] + ').');
         }
@@ -441,6 +444,7 @@ var __flatAppFn = function() {
         var prefNotes = prc.id + ':';
         if (prc.wing) prefNotes += ' Wing ' + prc.wing;
         if (prc.floor != null) prefNotes += ' Floor ' + prc.floor;
+        if (prc.unit != null) prefNotes += ' Unit ' + pad2(prc.unit);
         prefNotes += ' (from ' + prAvail.length + ' available)';
         auditTrail.push({
           step: stepNum, type: 'Pref', oldFlatNo: prc.flats[pf], newFlatCode: prPick,
@@ -542,13 +546,15 @@ var __flatAppFn = function() {
         var prOk = !!pra;
         if (prOk && prc.wing && prc.wing !== '') prOk = pra.wing === prc.wing;
         if (prOk && prc.floor != null) prOk = pra.floor === prc.floor;
+        if (prOk && prc.unit != null) prOk = pra.unit === prc.unit;
         var prDesc = prc.id + ' (Flat ' + prc.flats[pf] + '):';
         if (prc.wing) prDesc += ' Wing ' + prc.wing;
         if (prc.floor != null) prDesc += ' Floor ' + prc.floor;
+        if (prc.unit != null) prDesc += ' Unit ' + pad2(prc.unit);
         checks.push({
           constraint: prDesc,
           status: !!prOk,
-          details: prOk ? 'Wing ' + pra.wing + ' Floor ' + pra.floor : 'FAILED'
+          details: prOk ? 'Wing ' + pra.wing + ' Floor ' + pra.floor + ' Unit ' + pad2(pra.unit) : 'FAILED'
         });
       }
     }
