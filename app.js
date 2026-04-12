@@ -277,8 +277,8 @@ var __flatAppFn = function() {
     var cKeys = Object.keys(constraints);
     for (var ck = 0; ck < cKeys.length; ck++) {
       var co = constraints[cKeys[ck]];
-      if (co.type === 'group' && (co.flats.length < 2 || co.flats.length > 3)) {
-        throw new Error('"' + co.id + '" (group) needs 2 or 3 flats, found ' + co.flats.length + '.');
+      if (co.type === 'group' && co.flats.length < 2) {
+        throw new Error('"' + co.id + '" (group) needs ≥2 flats, found ' + co.flats.length + '.');
       }
       if (co.type === 'pref' && co.flats.length < 1) {
         throw new Error('"' + co.id + '" (pref) needs ≥1 flat, found ' + co.flats.length + '.');
@@ -338,12 +338,8 @@ var __flatAppFn = function() {
       else if (c.type === 'pref') prefs.push(c);
     }
 
-    // Split groups by size: 3-flat groups first (more constrained), then 2-flat groups
-    var groups3 = [], groups2 = [];
-    for (var gi = 0; gi < groups.length; gi++) {
-      if (groups[gi].flats.length === 3) groups3.push(groups[gi]);
-      else groups2.push(groups[gi]);
-    }
+    // Sort groups by size descending (larger groups first = more constrained)
+    groups.sort(function(a, b) { return b.flats.length - a.flats.length; });
 
     // Sort prefs by specificity: most specific first
     prefs.sort(function(a, b) {
@@ -352,177 +348,135 @@ var __flatAppFn = function() {
       return sb - sa;
     });
 
-    // ---- PHASE 1A: Groups of 3 (2 adjacent on floor X, 1 on floor X+1) ----
+    // ---- PHASE 1: Groups of N (consecutive adjacent units, filling floors then overflowing up) ----
     var usedGroupFloorKeys = [];
 
-    for (var g3i = 0; g3i < groups3.length; g3i++) {
-      var grp3 = groups3[g3i];
+    for (var gri = 0; gri < groups.length; gri++) {
+      var grp = groups[gri];
+      var grpSize = grp.flats.length;
 
-      // Eligible wings: need a floor with ≥2 units AND a floor+1 with ≥1 unit
-      var eligWings3;
-      if (grp3.wing && grp3.wing !== '') {
-        eligWings3 = [grp3.wing];
+      // Eligible wings
+      var eligWings;
+      if (grp.wing && grp.wing !== '') {
+        eligWings = [grp.wing];
       } else {
-        eligWings3 = [];
-        for (var wn3 = 0; wn3 < data.wingNames.length; wn3++) {
-          if (data.wingMaxUnits[data.wingNames[wn3]] >= 2) eligWings3.push(data.wingNames[wn3]);
+        eligWings = [];
+        for (var wni = 0; wni < data.wingNames.length; wni++) {
+          eligWings.push(data.wingNames[wni]);
         }
       }
-      if (eligWings3.length === 0) {
-        throw new Error('No wing with ≥2 units/floor for "' + grp3.id + '".');
-      }
 
-      // Find slots: (wing, floorX) with 2 consecutive available units + (wing, floorX+1) with ≥1 available unit
-      var slots3 = [];
-      for (var ew3 = 0; ew3 < eligWings3.length; ew3++) {
-        var ewing3 = eligWings3[ew3];
-        var wfMap3 = data.newWingFloorUnits[ewing3];
-        if (!wfMap3) continue;
-        var wfFloors3 = Object.keys(wfMap3).map(Number).sort(function(a, b) { return a - b; });
-        for (var ef3 = 0; ef3 < wfFloors3.length; ef3++) {
-          var floorX = wfFloors3[ef3];
-          if (wfMap3[floorX] < 2) continue;
-          if (grp3.floor != null && floorX !== grp3.floor) continue;
-          var floorXp1 = floorX + 1;
-          if (!wfMap3[floorXp1] || wfMap3[floorXp1] < 1) continue;
-          var keyX = ewing3 + '-' + floorX;
-          var keyXp1 = ewing3 + '-' + floorXp1;
-          if (usedGroupFloorKeys.indexOf(keyX) >= 0 || usedGroupFloorKeys.indexOf(keyXp1) >= 0) continue;
+      // Find all valid placement slots using a stack-based search
+      var groupSlots = [];
+      for (var ewi = 0; ewi < eligWings.length; ewi++) {
+        var ewing = eligWings[ewi];
+        var wfMap = data.newWingFloorUnits[ewing];
+        if (!wfMap) continue;
+        var wfFloors = Object.keys(wfMap).map(Number).sort(function(a, b) { return a - b; });
 
-          // Find consecutive available units on floorX
-          for (var eu3 = 1; eu3 < wfMap3[floorX]; eu3++) {
-            var ec3a = makeFlatCode(ewing3, floorX, eu3);
-            var ec3b = makeFlatCode(ewing3, floorX, eu3 + 1);
-            if (available.indexOf(ec3a) < 0 || available.indexOf(ec3b) < 0) continue;
+        for (var efi = 0; efi < wfFloors.length; efi++) {
+          var startFloor = wfFloors[efi];
+          if (grp.floor != null && startFloor !== grp.floor) continue;
 
-            // Find available units on floorX+1
-            for (var eu3c = 1; eu3c <= wfMap3[floorXp1]; eu3c++) {
-              var ec3c = makeFlatCode(ewing3, floorXp1, eu3c);
-              if (available.indexOf(ec3c) >= 0) {
-                slots3.push({
-                  wing: ewing3, floorA: floorX, floorB: floorXp1,
-                  code1: ec3a, code2: ec3b, code3: ec3c,
-                  unit1: eu3, unit2: eu3 + 1, unit3: eu3c
-                });
+          // Stack-based search: each state = { remaining, floor, partial }
+          var stack = [{ remaining: grpSize, floor: startFloor, partial: [] }];
+
+          while (stack.length > 0) {
+            var state = stack.pop();
+
+            if (state.remaining <= 0) {
+              groupSlots.push({ wing: ewing, placements: state.partial });
+              continue;
+            }
+
+            if (!wfMap[state.floor]) continue;
+            var floorKey = ewing + '-' + state.floor;
+            if (usedGroupFloorKeys.indexOf(floorKey) >= 0) continue;
+
+            // Find consecutive runs of available units on this floor
+            var maxUnits = wfMap[state.floor];
+            var runs = [];
+            var runStart = -1;
+            for (var u = 1; u <= maxUnits; u++) {
+              var uCode = makeFlatCode(ewing, state.floor, u);
+              if (available.indexOf(uCode) >= 0) {
+                if (runStart === -1) runStart = u;
+              } else {
+                if (runStart !== -1) {
+                  runs.push({ start: runStart, len: u - runStart });
+                  runStart = -1;
+                }
+              }
+            }
+            if (runStart !== -1) {
+              runs.push({ start: runStart, len: maxUnits - runStart + 1 });
+            }
+
+            for (var ri = 0; ri < runs.length; ri++) {
+              var run = runs[ri];
+              var take = Math.min(run.len, state.remaining);
+              var codes = [];
+              var units = [];
+              for (var ti = 0; ti < take; ti++) {
+                units.push(run.start + ti);
+                codes.push(makeFlatCode(ewing, state.floor, run.start + ti));
+              }
+
+              var newPartial = state.partial.concat([{ floor: state.floor, units: units, codes: codes }]);
+              var newRemaining = state.remaining - take;
+
+              if (newRemaining === 0) {
+                groupSlots.push({ wing: ewing, placements: newPartial });
+              } else {
+                // Overflow to next consecutive floor
+                stack.push({ remaining: newRemaining, floor: state.floor + 1, partial: newPartial });
               }
             }
           }
         }
       }
 
-      if (slots3.length === 0) {
-        throw new Error('No consecutive floors with enough available units for "' + grp3.id + '" (needs 2 adjacent on floor X + 1 on floor X+1).');
+      if (groupSlots.length === 0) {
+        throw new Error('No valid placement found for group "' + grp.id + '" (' + grpSize +
+          ' flats). Need consecutive adjacent units across consecutive floors in the same wing.');
       }
 
-      var chosen3 = rng.pick(slots3);
-      usedGroupFloorKeys.push(chosen3.wing + '-' + chosen3.floorA);
-      usedGroupFloorKeys.push(chosen3.wing + '-' + chosen3.floorB);
+      var chosenSlot = rng.pick(groupSlots);
 
-      allocations[grp3.flats[0]] = {
-        newFlatCode: chosen3.code1, wing: chosen3.wing, floor: chosen3.floorA,
-        unit: chosen3.unit1, type: 'Group (' + grp3.id + ')'
-      };
-      allocations[grp3.flats[1]] = {
-        newFlatCode: chosen3.code2, wing: chosen3.wing, floor: chosen3.floorA,
-        unit: chosen3.unit2, type: 'Group (' + grp3.id + ')'
-      };
-      allocations[grp3.flats[2]] = {
-        newFlatCode: chosen3.code3, wing: chosen3.wing, floor: chosen3.floorB,
-        unit: chosen3.unit3, type: 'Group (' + grp3.id + ')'
-      };
-      removeAvail(chosen3.code1);
-      removeAvail(chosen3.code2);
-      removeAvail(chosen3.code3);
-
-      stepNum++;
-      auditTrail.push({
-        step: stepNum, type: 'Grouped', oldFlatNo: grp3.flats[0], newFlatCode: chosen3.code1,
-        notes: grp3.id + ': Wing ' + chosen3.wing + ' Floor ' + chosen3.floorA +
-               ' Unit ' + pad2(chosen3.unit1) + ' (from ' + slots3.length + ' eligible slot(s))'
-      });
-      stepNum++;
-      auditTrail.push({
-        step: stepNum, type: 'Grouped', oldFlatNo: grp3.flats[1], newFlatCode: chosen3.code2,
-        notes: grp3.id + ': Wing ' + chosen3.wing + ' Floor ' + chosen3.floorA + ' Unit ' + pad2(chosen3.unit2)
-      });
-      stepNum++;
-      auditTrail.push({
-        step: stepNum, type: 'Grouped', oldFlatNo: grp3.flats[2], newFlatCode: chosen3.code3,
-        notes: grp3.id + ': Wing ' + chosen3.wing + ' Floor ' + chosen3.floorB + ' Unit ' + pad2(chosen3.unit3)
-      });
-    }
-
-    // ---- PHASE 1B: Groups of 2 (adjacent on same floor) ----
-    for (var g2i = 0; g2i < groups2.length; g2i++) {
-      var grp2 = groups2[g2i];
-
-      // Eligible wings
-      var eligWings2;
-      if (grp2.wing && grp2.wing !== '') {
-        eligWings2 = [grp2.wing];
-      } else {
-        eligWings2 = [];
-        for (var wn2 = 0; wn2 < data.wingNames.length; wn2++) {
-          if (data.wingMaxUnits[data.wingNames[wn2]] >= 2) eligWings2.push(data.wingNames[wn2]);
-        }
-      }
-      if (eligWings2.length === 0) {
-        throw new Error('No wing with ≥2 units/floor for "' + grp2.id + '".');
+      // Mark all used floor-keys
+      for (var pi = 0; pi < chosenSlot.placements.length; pi++) {
+        usedGroupFloorKeys.push(chosenSlot.wing + '-' + chosenSlot.placements[pi].floor);
       }
 
-      // Find (wing, floor) slots with 2 consecutive available units
-      var slots2 = [];
-      for (var ew2 = 0; ew2 < eligWings2.length; ew2++) {
-        var ewing2 = eligWings2[ew2];
-        var wfMap2 = data.newWingFloorUnits[ewing2];
-        if (!wfMap2) continue;
-        var wfFloors2 = Object.keys(wfMap2).map(Number);
-        for (var ef2 = 0; ef2 < wfFloors2.length; ef2++) {
-          var efl2 = wfFloors2[ef2];
-          if (wfMap2[efl2] < 2) continue;
-          if (grp2.floor != null && efl2 !== grp2.floor) continue;
-          var floorKey2 = ewing2 + '-' + efl2;
-          if (usedGroupFloorKeys.indexOf(floorKey2) >= 0) continue;
-
-          for (var eu2 = 1; eu2 < wfMap2[efl2]; eu2++) {
-            var ec2a = makeFlatCode(ewing2, efl2, eu2);
-            var ec2b = makeFlatCode(ewing2, efl2, eu2 + 1);
-            if (available.indexOf(ec2a) >= 0 && available.indexOf(ec2b) >= 0) {
-              slots2.push({ wing: ewing2, floor: efl2, code1: ec2a, code2: ec2b, unit1: eu2, unit2: eu2 + 1 });
-            }
-          }
+      // Flatten placement into ordered codes/units/floors
+      var allCodes = [];
+      var allUnits = [];
+      var allFloors = [];
+      for (var pli = 0; pli < chosenSlot.placements.length; pli++) {
+        var pl = chosenSlot.placements[pli];
+        for (var pci = 0; pci < pl.codes.length; pci++) {
+          allCodes.push(pl.codes[pci]);
+          allUnits.push(pl.units[pci]);
+          allFloors.push(pl.floor);
         }
       }
 
-      if (slots2.length === 0) {
-        throw new Error('No floor with 2 consecutive available units for "' + grp2.id + '".');
+      // Assign flats to group members
+      for (var mi = 0; mi < grp.flats.length; mi++) {
+        allocations[grp.flats[mi]] = {
+          newFlatCode: allCodes[mi], wing: chosenSlot.wing, floor: allFloors[mi],
+          unit: allUnits[mi], type: 'Group (' + grp.id + ')'
+        };
+        removeAvail(allCodes[mi]);
+
+        stepNum++;
+        var gNotes = grp.id + ': Wing ' + chosenSlot.wing + ' Floor ' + allFloors[mi] + ' Unit ' + pad2(allUnits[mi]);
+        if (mi === 0) gNotes += ' (from ' + groupSlots.length + ' eligible slot(s))';
+        auditTrail.push({
+          step: stepNum, type: 'Grouped', oldFlatNo: grp.flats[mi], newFlatCode: allCodes[mi],
+          notes: gNotes
+        });
       }
-
-      var chosen2 = rng.pick(slots2);
-      usedGroupFloorKeys.push(chosen2.wing + '-' + chosen2.floor);
-
-      allocations[grp2.flats[0]] = {
-        newFlatCode: chosen2.code1, wing: chosen2.wing, floor: chosen2.floor,
-        unit: chosen2.unit1, type: 'Group (' + grp2.id + ')'
-      };
-      allocations[grp2.flats[1]] = {
-        newFlatCode: chosen2.code2, wing: chosen2.wing, floor: chosen2.floor,
-        unit: chosen2.unit2, type: 'Group (' + grp2.id + ')'
-      };
-      removeAvail(chosen2.code1);
-      removeAvail(chosen2.code2);
-
-      stepNum++;
-      auditTrail.push({
-        step: stepNum, type: 'Grouped', oldFlatNo: grp2.flats[0], newFlatCode: chosen2.code1,
-        notes: grp2.id + ': Wing ' + chosen2.wing + ' Floor ' + chosen2.floor +
-               ' Unit ' + pad2(chosen2.unit1) + ' (from ' + slots2.length + ' eligible slot(s))'
-      });
-      stepNum++;
-      auditTrail.push({
-        step: stepNum, type: 'Grouped', oldFlatNo: grp2.flats[1], newFlatCode: chosen2.code2,
-        notes: grp2.id + ': Wing ' + chosen2.wing + ' Floor ' + chosen2.floor + ' Unit ' + pad2(chosen2.unit2)
-      });
     }
 
     // ---- PHASE 2: Preferences (wing and/or floor) ----
@@ -620,53 +574,90 @@ var __flatAppFn = function() {
     for (var gi = 0; gi < groups.length; gi++) {
       var grp = groups[gi];
 
-      if (grp.flats.length === 2) {
-        // Group of 2: same wing, same floor, adjacent units
-        var a1 = allocations[grp.flats[0]];
-        var a2 = allocations[grp.flats[1]];
-        var ok2 = a1 && a2 && a1.wing === a2.wing && a1.floor === a2.floor &&
-                  Math.abs(a1.unit - a2.unit) === 1;
-        if (grp.wing && grp.wing !== '') ok2 = ok2 && a1 && a1.wing === grp.wing;
-        if (grp.floor != null) ok2 = ok2 && a1 && a1.floor === grp.floor;
-
-        groupFloorKeys.push(a1 ? a1.wing + '-' + a1.floor : 'N/A');
-        var grpDesc2 = grp.id + ' (Flats ' + grp.flats.join(' & ') + '): same floor, adjacent';
-        if (grp.wing) grpDesc2 += ', Wing ' + grp.wing;
-        if (grp.floor != null) grpDesc2 += ', Floor ' + grp.floor;
-        checks.push({
-          constraint: grpDesc2,
-          status: !!ok2,
-          details: ok2
-            ? 'Wing ' + a1.wing + ' Floor ' + a1.floor + ' Units ' + pad2(a1.unit) + ' & ' + pad2(a2.unit)
-            : 'FAILED'
-        });
-      } else if (grp.flats.length === 3) {
-        // Group of 3: flats[0] & flats[1] same wing, same floor, adjacent; flats[2] same wing, floor+1
-        var b1 = allocations[grp.flats[0]];
-        var b2 = allocations[grp.flats[1]];
-        var b3 = allocations[grp.flats[2]];
-        var ok3 = b1 && b2 && b3 &&
-                  b1.wing === b2.wing && b1.wing === b3.wing &&
-                  b1.floor === b2.floor &&
-                  Math.abs(b1.unit - b2.unit) === 1 &&
-                  b3.floor === b1.floor + 1;
-        if (grp.wing && grp.wing !== '') ok3 = ok3 && b1 && b1.wing === grp.wing;
-        if (grp.floor != null) ok3 = ok3 && b1 && b1.floor === grp.floor;
-
-        groupFloorKeys.push(b1 ? b1.wing + '-' + b1.floor : 'N/A');
-        groupFloorKeys.push(b3 ? b3.wing + '-' + b3.floor : 'N/A');
-        var grpDesc3 = grp.id + ' (Flats ' + grp.flats.join(', ') + '): 2 adjacent on floor X, 1 on floor X+1';
-        if (grp.wing) grpDesc3 += ', Wing ' + grp.wing;
-        if (grp.floor != null) grpDesc3 += ', Floor ' + grp.floor;
-        checks.push({
-          constraint: grpDesc3,
-          status: !!ok3,
-          details: ok3
-            ? 'Wing ' + b1.wing + ' Floors ' + b1.floor + ' & ' + b3.floor +
-              ' Units ' + pad2(b1.unit) + ' & ' + pad2(b2.unit) + ', ' + pad2(b3.unit)
-            : 'FAILED'
-        });
+      // Collect all allocations for this group's members
+      var memberAllocs = [];
+      var allMemValid = true;
+      for (var gmi = 0; gmi < grp.flats.length; gmi++) {
+        var gma = allocations[grp.flats[gmi]];
+        if (!gma) { allMemValid = false; break; }
+        memberAllocs.push(gma);
       }
+
+      var okN = allMemValid;
+
+      // All must be in the same wing
+      if (okN) {
+        for (var gwi = 1; gwi < memberAllocs.length; gwi++) {
+          if (memberAllocs[gwi].wing !== memberAllocs[0].wing) { okN = false; break; }
+        }
+      }
+
+      // Group members by floor, check floors are consecutive, and units are consecutive on each floor
+      var byFloor = {};
+      if (okN) {
+        for (var gfi = 0; gfi < memberAllocs.length; gfi++) {
+          var gfl = memberAllocs[gfi].floor;
+          if (!byFloor[gfl]) byFloor[gfl] = [];
+          byFloor[gfl].push(memberAllocs[gfi].unit);
+        }
+
+        var floorNums = Object.keys(byFloor).map(Number).sort(function(a, b) { return a - b; });
+        for (var gci = 1; gci < floorNums.length; gci++) {
+          if (floorNums[gci] !== floorNums[gci - 1] + 1) { okN = false; break; }
+        }
+
+        if (okN) {
+          for (var gui = 0; gui < floorNums.length; gui++) {
+            var flUnits = byFloor[floorNums[gui]].sort(function(a, b) { return a - b; });
+            for (var guj = 1; guj < flUnits.length; guj++) {
+              if (flUnits[guj] !== flUnits[guj - 1] + 1) { okN = false; break; }
+            }
+            if (!okN) break;
+          }
+        }
+      }
+
+      // Check wing/floor constraints
+      if (okN && grp.wing && grp.wing !== '') {
+        okN = memberAllocs[0].wing === grp.wing;
+      }
+      if (okN && grp.floor != null) {
+        var minGrpFloor = memberAllocs[0].floor;
+        for (var gmfi = 1; gmfi < memberAllocs.length; gmfi++) {
+          if (memberAllocs[gmfi].floor < minGrpFloor) minGrpFloor = memberAllocs[gmfi].floor;
+        }
+        okN = minGrpFloor === grp.floor;
+      }
+
+      // Collect floor keys for uniqueness check
+      var memberFloorSet = {};
+      for (var gki = 0; gki < memberAllocs.length; gki++) {
+        memberFloorSet[memberAllocs[gki].wing + '-' + memberAllocs[gki].floor] = true;
+      }
+      var mfKeys = Object.keys(memberFloorSet);
+      for (var gmk = 0; gmk < mfKeys.length; gmk++) {
+        groupFloorKeys.push(mfKeys[gmk]);
+      }
+
+      var grpDescN = grp.id + ' (Flats ' + grp.flats.join(', ') + '): ' + grp.flats.length + ' members, consecutive adjacent';
+      if (grp.wing) grpDescN += ', Wing ' + grp.wing;
+      if (grp.floor != null) grpDescN += ', Floor ' + grp.floor;
+
+      var detailStr = 'FAILED';
+      if (okN && memberAllocs.length > 0) {
+        var usedFloors = Object.keys(byFloor).map(Number).sort(function(a, b) { return a - b; });
+        var unitStrs = [];
+        for (var gdi = 0; gdi < memberAllocs.length; gdi++) {
+          unitStrs.push(pad2(memberAllocs[gdi].unit));
+        }
+        detailStr = 'Wing ' + memberAllocs[0].wing + ' Floor(s) ' + usedFloors.join(', ') + ' Units ' + unitStrs.join(', ');
+      }
+
+      checks.push({
+        constraint: grpDescN,
+        status: !!okN,
+        details: detailStr
+      });
     }
 
     if (groupFloorKeys.length >= 2) {
