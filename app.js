@@ -111,12 +111,12 @@ var __flatAppFn = function() {
         var wb = XLSX.read(data, { type: 'array' });
         parsedData = parseWorkbook(wb);
 
-        var counts = { pair: 0, pref: 0 };
+        var counts = { group: 0, pref: 0 };
         for (var c = 0; c < parsedData.constraints.length; c++) {
           counts[parsedData.constraints[c].type]++;
         }
         var parts = [];
-        if (counts.pair > 0) parts.push(counts.pair + ' pair(s)');
+        if (counts.group > 0) parts.push(counts.group + ' group(s)');
         if (counts.pref > 0) parts.push(counts.pref + ' pref(s)');
 
         fileInfo.innerHTML =
@@ -244,8 +244,8 @@ var __flatAppFn = function() {
         var cFloor = (crow[3] != null && crow[3] !== '') ? parseInt(crow[3], 10) : null;
         var cUnit = (crow[4] != null && crow[4] !== '') ? parseInt(crow[4], 10) : null;
 
-        if (['pair', 'pref'].indexOf(cType) < 0) {
-          throw new Error('Constraint "' + cId + '": unknown type "' + cType + '". Valid: pair, pref.');
+        if (['group', 'pref'].indexOf(cType) < 0) {
+          throw new Error('Constraint "' + cId + '": unknown type "' + cType + '". Valid: group, pref.');
         }
         if (constraints[cId]) {
           throw new Error('Duplicate constraint ID "' + cId + '" found at row ' + (ci + 1) + '. Each ID must appear only once.');
@@ -277,8 +277,8 @@ var __flatAppFn = function() {
     var cKeys = Object.keys(constraints);
     for (var ck = 0; ck < cKeys.length; ck++) {
       var co = constraints[cKeys[ck]];
-      if (co.type === 'pair' && co.flats.length !== 2) {
-        throw new Error('"' + co.id + '" (pair) needs exactly 2 flats, found ' + co.flats.length + '.');
+      if (co.type === 'group' && (co.flats.length < 2 || co.flats.length > 3)) {
+        throw new Error('"' + co.id + '" (group) needs 2 or 3 flats, found ' + co.flats.length + '.');
       }
       if (co.type === 'pref' && co.flats.length < 1) {
         throw new Error('"' + co.id + '" (pref) needs ≥1 flat, found ' + co.flats.length + '.');
@@ -331,11 +331,18 @@ var __flatAppFn = function() {
     }
 
     // Separate by type
-    var pairs = [], prefs = [];
+    var groups = [], prefs = [];
     for (var ci = 0; ci < data.constraints.length; ci++) {
       var c = data.constraints[ci];
-      if (c.type === 'pair') pairs.push(c);
+      if (c.type === 'group') groups.push(c);
       else if (c.type === 'pref') prefs.push(c);
+    }
+
+    // Split groups by size: 3-flat groups first (more constrained), then 2-flat groups
+    var groups3 = [], groups2 = [];
+    for (var gi = 0; gi < groups.length; gi++) {
+      if (groups[gi].flats.length === 3) groups3.push(groups[gi]);
+      else groups2.push(groups[gi]);
     }
 
     // Sort prefs by specificity: most specific first
@@ -345,78 +352,176 @@ var __flatAppFn = function() {
       return sb - sa;
     });
 
-    // ---- PHASE 1: Pairs ----
-    var usedPairFloorKeys = [];
+    // ---- PHASE 1A: Groups of 3 (2 adjacent on floor X, 1 on floor X+1) ----
+    var usedGroupFloorKeys = [];
 
-    for (var pi = 0; pi < pairs.length; pi++) {
-      var pair = pairs[pi];
+    for (var g3i = 0; g3i < groups3.length; g3i++) {
+      var grp3 = groups3[g3i];
 
-      // Eligible wings
-      var eligWings;
-      if (pair.wing && pair.wing !== '') {
-        eligWings = [pair.wing];
+      // Eligible wings: need a floor with ≥2 units AND a floor+1 with ≥1 unit
+      var eligWings3;
+      if (grp3.wing && grp3.wing !== '') {
+        eligWings3 = [grp3.wing];
       } else {
-        eligWings = [];
-        for (var wn = 0; wn < data.wingNames.length; wn++) {
-          if (data.wingMaxUnits[data.wingNames[wn]] >= 2) eligWings.push(data.wingNames[wn]);
+        eligWings3 = [];
+        for (var wn3 = 0; wn3 < data.wingNames.length; wn3++) {
+          if (data.wingMaxUnits[data.wingNames[wn3]] >= 2) eligWings3.push(data.wingNames[wn3]);
         }
       }
-      if (eligWings.length === 0) {
-        throw new Error('No wing with ≥2 units/floor for "' + pair.id + '".');
+      if (eligWings3.length === 0) {
+        throw new Error('No wing with ≥2 units/floor for "' + grp3.id + '".');
       }
 
-      // Find (wing, floor) slots with 2 consecutive available units
-      var slots = [];
-      for (var ew = 0; ew < eligWings.length; ew++) {
-        var ewing = eligWings[ew];
-        var wfMap = data.newWingFloorUnits[ewing];
-        if (!wfMap) continue;
-        var wfFloors = Object.keys(wfMap).map(Number);
-        for (var ef = 0; ef < wfFloors.length; ef++) {
-          var efl = wfFloors[ef];
-          if (wfMap[efl] < 2) continue;
-          if (pair.floor != null && efl !== pair.floor) continue;
-          var floorKey = ewing + '-' + efl;
-          if (usedPairFloorKeys.indexOf(floorKey) >= 0) continue;
+      // Find slots: (wing, floorX) with 2 consecutive available units + (wing, floorX+1) with ≥1 available unit
+      var slots3 = [];
+      for (var ew3 = 0; ew3 < eligWings3.length; ew3++) {
+        var ewing3 = eligWings3[ew3];
+        var wfMap3 = data.newWingFloorUnits[ewing3];
+        if (!wfMap3) continue;
+        var wfFloors3 = Object.keys(wfMap3).map(Number).sort(function(a, b) { return a - b; });
+        for (var ef3 = 0; ef3 < wfFloors3.length; ef3++) {
+          var floorX = wfFloors3[ef3];
+          if (wfMap3[floorX] < 2) continue;
+          if (grp3.floor != null && floorX !== grp3.floor) continue;
+          var floorXp1 = floorX + 1;
+          if (!wfMap3[floorXp1] || wfMap3[floorXp1] < 1) continue;
+          var keyX = ewing3 + '-' + floorX;
+          var keyXp1 = ewing3 + '-' + floorXp1;
+          if (usedGroupFloorKeys.indexOf(keyX) >= 0 || usedGroupFloorKeys.indexOf(keyXp1) >= 0) continue;
 
-          for (var eu = 1; eu < wfMap[efl]; eu++) {
-            var ec1 = makeFlatCode(ewing, efl, eu);
-            var ec2 = makeFlatCode(ewing, efl, eu + 1);
-            if (available.indexOf(ec1) >= 0 && available.indexOf(ec2) >= 0) {
-              slots.push({ wing: ewing, floor: efl, code1: ec1, code2: ec2, unit1: eu, unit2: eu + 1 });
+          // Find consecutive available units on floorX
+          for (var eu3 = 1; eu3 < wfMap3[floorX]; eu3++) {
+            var ec3a = makeFlatCode(ewing3, floorX, eu3);
+            var ec3b = makeFlatCode(ewing3, floorX, eu3 + 1);
+            if (available.indexOf(ec3a) < 0 || available.indexOf(ec3b) < 0) continue;
+
+            // Find available units on floorX+1
+            for (var eu3c = 1; eu3c <= wfMap3[floorXp1]; eu3c++) {
+              var ec3c = makeFlatCode(ewing3, floorXp1, eu3c);
+              if (available.indexOf(ec3c) >= 0) {
+                slots3.push({
+                  wing: ewing3, floorA: floorX, floorB: floorXp1,
+                  code1: ec3a, code2: ec3b, code3: ec3c,
+                  unit1: eu3, unit2: eu3 + 1, unit3: eu3c
+                });
+              }
             }
           }
         }
       }
 
-      if (slots.length === 0) {
-        throw new Error('No floor with 2 consecutive available units for "' + pair.id + '".');
+      if (slots3.length === 0) {
+        throw new Error('No consecutive floors with enough available units for "' + grp3.id + '" (needs 2 adjacent on floor X + 1 on floor X+1).');
       }
 
-      var chosen = rng.pick(slots);
-      usedPairFloorKeys.push(chosen.wing + '-' + chosen.floor);
+      var chosen3 = rng.pick(slots3);
+      usedGroupFloorKeys.push(chosen3.wing + '-' + chosen3.floorA);
+      usedGroupFloorKeys.push(chosen3.wing + '-' + chosen3.floorB);
 
-      allocations[pair.flats[0]] = {
-        newFlatCode: chosen.code1, wing: chosen.wing, floor: chosen.floor,
-        unit: chosen.unit1, type: 'Paired (' + pair.id + ')'
+      allocations[grp3.flats[0]] = {
+        newFlatCode: chosen3.code1, wing: chosen3.wing, floor: chosen3.floorA,
+        unit: chosen3.unit1, type: 'Group (' + grp3.id + ')'
       };
-      allocations[pair.flats[1]] = {
-        newFlatCode: chosen.code2, wing: chosen.wing, floor: chosen.floor,
-        unit: chosen.unit2, type: 'Paired (' + pair.id + ')'
+      allocations[grp3.flats[1]] = {
+        newFlatCode: chosen3.code2, wing: chosen3.wing, floor: chosen3.floorA,
+        unit: chosen3.unit2, type: 'Group (' + grp3.id + ')'
       };
-      removeAvail(chosen.code1);
-      removeAvail(chosen.code2);
+      allocations[grp3.flats[2]] = {
+        newFlatCode: chosen3.code3, wing: chosen3.wing, floor: chosen3.floorB,
+        unit: chosen3.unit3, type: 'Group (' + grp3.id + ')'
+      };
+      removeAvail(chosen3.code1);
+      removeAvail(chosen3.code2);
+      removeAvail(chosen3.code3);
 
       stepNum++;
       auditTrail.push({
-        step: stepNum, type: 'Paired', oldFlatNo: pair.flats[0], newFlatCode: chosen.code1,
-        notes: pair.id + ': Wing ' + chosen.wing + ' Floor ' + chosen.floor +
-               ' Unit ' + pad2(chosen.unit1) + ' (from ' + slots.length + ' eligible slot(s))'
+        step: stepNum, type: 'Grouped', oldFlatNo: grp3.flats[0], newFlatCode: chosen3.code1,
+        notes: grp3.id + ': Wing ' + chosen3.wing + ' Floor ' + chosen3.floorA +
+               ' Unit ' + pad2(chosen3.unit1) + ' (from ' + slots3.length + ' eligible slot(s))'
       });
       stepNum++;
       auditTrail.push({
-        step: stepNum, type: 'Paired', oldFlatNo: pair.flats[1], newFlatCode: chosen.code2,
-        notes: pair.id + ': Wing ' + chosen.wing + ' Floor ' + chosen.floor + ' Unit ' + pad2(chosen.unit2)
+        step: stepNum, type: 'Grouped', oldFlatNo: grp3.flats[1], newFlatCode: chosen3.code2,
+        notes: grp3.id + ': Wing ' + chosen3.wing + ' Floor ' + chosen3.floorA + ' Unit ' + pad2(chosen3.unit2)
+      });
+      stepNum++;
+      auditTrail.push({
+        step: stepNum, type: 'Grouped', oldFlatNo: grp3.flats[2], newFlatCode: chosen3.code3,
+        notes: grp3.id + ': Wing ' + chosen3.wing + ' Floor ' + chosen3.floorB + ' Unit ' + pad2(chosen3.unit3)
+      });
+    }
+
+    // ---- PHASE 1B: Groups of 2 (adjacent on same floor) ----
+    for (var g2i = 0; g2i < groups2.length; g2i++) {
+      var grp2 = groups2[g2i];
+
+      // Eligible wings
+      var eligWings2;
+      if (grp2.wing && grp2.wing !== '') {
+        eligWings2 = [grp2.wing];
+      } else {
+        eligWings2 = [];
+        for (var wn2 = 0; wn2 < data.wingNames.length; wn2++) {
+          if (data.wingMaxUnits[data.wingNames[wn2]] >= 2) eligWings2.push(data.wingNames[wn2]);
+        }
+      }
+      if (eligWings2.length === 0) {
+        throw new Error('No wing with ≥2 units/floor for "' + grp2.id + '".');
+      }
+
+      // Find (wing, floor) slots with 2 consecutive available units
+      var slots2 = [];
+      for (var ew2 = 0; ew2 < eligWings2.length; ew2++) {
+        var ewing2 = eligWings2[ew2];
+        var wfMap2 = data.newWingFloorUnits[ewing2];
+        if (!wfMap2) continue;
+        var wfFloors2 = Object.keys(wfMap2).map(Number);
+        for (var ef2 = 0; ef2 < wfFloors2.length; ef2++) {
+          var efl2 = wfFloors2[ef2];
+          if (wfMap2[efl2] < 2) continue;
+          if (grp2.floor != null && efl2 !== grp2.floor) continue;
+          var floorKey2 = ewing2 + '-' + efl2;
+          if (usedGroupFloorKeys.indexOf(floorKey2) >= 0) continue;
+
+          for (var eu2 = 1; eu2 < wfMap2[efl2]; eu2++) {
+            var ec2a = makeFlatCode(ewing2, efl2, eu2);
+            var ec2b = makeFlatCode(ewing2, efl2, eu2 + 1);
+            if (available.indexOf(ec2a) >= 0 && available.indexOf(ec2b) >= 0) {
+              slots2.push({ wing: ewing2, floor: efl2, code1: ec2a, code2: ec2b, unit1: eu2, unit2: eu2 + 1 });
+            }
+          }
+        }
+      }
+
+      if (slots2.length === 0) {
+        throw new Error('No floor with 2 consecutive available units for "' + grp2.id + '".');
+      }
+
+      var chosen2 = rng.pick(slots2);
+      usedGroupFloorKeys.push(chosen2.wing + '-' + chosen2.floor);
+
+      allocations[grp2.flats[0]] = {
+        newFlatCode: chosen2.code1, wing: chosen2.wing, floor: chosen2.floor,
+        unit: chosen2.unit1, type: 'Group (' + grp2.id + ')'
+      };
+      allocations[grp2.flats[1]] = {
+        newFlatCode: chosen2.code2, wing: chosen2.wing, floor: chosen2.floor,
+        unit: chosen2.unit2, type: 'Group (' + grp2.id + ')'
+      };
+      removeAvail(chosen2.code1);
+      removeAvail(chosen2.code2);
+
+      stepNum++;
+      auditTrail.push({
+        step: stepNum, type: 'Grouped', oldFlatNo: grp2.flats[0], newFlatCode: chosen2.code1,
+        notes: grp2.id + ': Wing ' + chosen2.wing + ' Floor ' + chosen2.floor +
+               ' Unit ' + pad2(chosen2.unit1) + ' (from ' + slots2.length + ' eligible slot(s))'
+      });
+      stepNum++;
+      auditTrail.push({
+        step: stepNum, type: 'Grouped', oldFlatNo: grp2.flats[1], newFlatCode: chosen2.code2,
+        notes: grp2.id + ': Wing ' + chosen2.wing + ' Floor ' + chosen2.floor + ' Unit ' + pad2(chosen2.unit2)
       });
     }
 
@@ -492,7 +597,7 @@ var __flatAppFn = function() {
     }
 
     var unoccupied = available.slice();
-    var validation = validateAllocation(data, allocations, pairs, prefs);
+    var validation = validateAllocation(data, allocations, groups, prefs);
 
     return {
       allocations: allocations,
@@ -505,46 +610,76 @@ var __flatAppFn = function() {
   }
 
   // ======================== VALIDATION ========================
-  function validateAllocation(data, allocations, pairs, prefs) {
+  function validateAllocation(data, allocations, groups, prefs) {
     var checks = [];
     var allNew = [];
     for (var key in allocations) allNew.push(allocations[key].newFlatCode);
 
-    // Pair checks
-    var pairFloorKeys = [];
-    for (var pi = 0; pi < pairs.length; pi++) {
-      var pair = pairs[pi];
-      var a1 = allocations[pair.flats[0]];
-      var a2 = allocations[pair.flats[1]];
-      var ok = a1 && a2 && a1.wing === a2.wing && a1.floor === a2.floor &&
-               Math.abs(a1.unit - a2.unit) === 1;
-      if (pair.wing && pair.wing !== '') ok = ok && a1 && a1.wing === pair.wing;
-      if (pair.floor != null) ok = ok && a1 && a1.floor === pair.floor;
+    // Group checks
+    var groupFloorKeys = [];
+    for (var gi = 0; gi < groups.length; gi++) {
+      var grp = groups[gi];
 
-      pairFloorKeys.push(a1 ? a1.wing + '-' + a1.floor : 'N/A');
-      var pairDesc = pair.id + ' (Flats ' + pair.flats.join(' & ') + '): same floor, adjacent';
-      if (pair.wing) pairDesc += ', Wing ' + pair.wing;
-      if (pair.floor != null) pairDesc += ', Floor ' + pair.floor;
-      checks.push({
-        constraint: pairDesc,
-        status: !!ok,
-        details: ok
-          ? 'Wing ' + a1.wing + ' Floor ' + a1.floor + ' Units ' + pad2(a1.unit) + ' & ' + pad2(a2.unit)
-          : 'FAILED'
-      });
+      if (grp.flats.length === 2) {
+        // Group of 2: same wing, same floor, adjacent units
+        var a1 = allocations[grp.flats[0]];
+        var a2 = allocations[grp.flats[1]];
+        var ok2 = a1 && a2 && a1.wing === a2.wing && a1.floor === a2.floor &&
+                  Math.abs(a1.unit - a2.unit) === 1;
+        if (grp.wing && grp.wing !== '') ok2 = ok2 && a1 && a1.wing === grp.wing;
+        if (grp.floor != null) ok2 = ok2 && a1 && a1.floor === grp.floor;
+
+        groupFloorKeys.push(a1 ? a1.wing + '-' + a1.floor : 'N/A');
+        var grpDesc2 = grp.id + ' (Flats ' + grp.flats.join(' & ') + '): same floor, adjacent';
+        if (grp.wing) grpDesc2 += ', Wing ' + grp.wing;
+        if (grp.floor != null) grpDesc2 += ', Floor ' + grp.floor;
+        checks.push({
+          constraint: grpDesc2,
+          status: !!ok2,
+          details: ok2
+            ? 'Wing ' + a1.wing + ' Floor ' + a1.floor + ' Units ' + pad2(a1.unit) + ' & ' + pad2(a2.unit)
+            : 'FAILED'
+        });
+      } else if (grp.flats.length === 3) {
+        // Group of 3: flats[0] & flats[1] same wing, same floor, adjacent; flats[2] same wing, floor+1
+        var b1 = allocations[grp.flats[0]];
+        var b2 = allocations[grp.flats[1]];
+        var b3 = allocations[grp.flats[2]];
+        var ok3 = b1 && b2 && b3 &&
+                  b1.wing === b2.wing && b1.wing === b3.wing &&
+                  b1.floor === b2.floor &&
+                  Math.abs(b1.unit - b2.unit) === 1 &&
+                  b3.floor === b1.floor + 1;
+        if (grp.wing && grp.wing !== '') ok3 = ok3 && b1 && b1.wing === grp.wing;
+        if (grp.floor != null) ok3 = ok3 && b1 && b1.floor === grp.floor;
+
+        groupFloorKeys.push(b1 ? b1.wing + '-' + b1.floor : 'N/A');
+        groupFloorKeys.push(b3 ? b3.wing + '-' + b3.floor : 'N/A');
+        var grpDesc3 = grp.id + ' (Flats ' + grp.flats.join(', ') + '): 2 adjacent on floor X, 1 on floor X+1';
+        if (grp.wing) grpDesc3 += ', Wing ' + grp.wing;
+        if (grp.floor != null) grpDesc3 += ', Floor ' + grp.floor;
+        checks.push({
+          constraint: grpDesc3,
+          status: !!ok3,
+          details: ok3
+            ? 'Wing ' + b1.wing + ' Floors ' + b1.floor + ' & ' + b3.floor +
+              ' Units ' + pad2(b1.unit) + ' & ' + pad2(b2.unit) + ', ' + pad2(b3.unit)
+            : 'FAILED'
+        });
+      }
     }
 
-    if (pairs.length >= 2) {
+    if (groupFloorKeys.length >= 2) {
       var uniq = true;
-      for (var i = 0; i < pairFloorKeys.length; i++) {
-        for (var j = i + 1; j < pairFloorKeys.length; j++) {
-          if (pairFloorKeys[i] === pairFloorKeys[j]) uniq = false;
+      for (var i = 0; i < groupFloorKeys.length; i++) {
+        for (var j = i + 1; j < groupFloorKeys.length; j++) {
+          if (groupFloorKeys[i] !== 'N/A' && groupFloorKeys[i] === groupFloorKeys[j]) uniq = false;
         }
       }
       checks.push({
-        constraint: 'All pairs on different wing-floor combinations',
+        constraint: 'All groups on different wing-floor combinations',
         status: uniq,
-        details: uniq ? 'Keys: ' + pairFloorKeys.join(', ') : 'FAILED — two pairs share a wing-floor'
+        details: uniq ? 'Keys: ' + groupFloorKeys.join(', ') : 'FAILED — two groups share a wing-floor'
       });
     }
 
@@ -814,7 +949,7 @@ var __flatAppFn = function() {
 
     // Sheet 5 — Metadata
     var allPass = r.validation.every(function(v) { return v.status; });
-    var cCounts = { pair: 0, pref: 0 };
+    var cCounts = { group: 0, pref: 0 };
     for (var mc = 0; mc < parsedData.constraints.length; mc++) {
       cCounts[parsedData.constraints[mc].type]++;
     }
@@ -825,7 +960,7 @@ var __flatAppFn = function() {
       ['Old Building Flats', parsedData.totalOldFlats],
       ['New Building Flats', parsedData.totalNewFlats],
       ['Wings', parsedData.wingNames.join(', ')],
-      ['Pair Constraints', cCounts.pair],
+      ['Group Constraints', cCounts.group],
       ['Pref Constraints', cCounts.pref],
       ['Unoccupied New Flats', r.unoccupied.length],
       ['Status', allPass ? 'All checks passed' : 'Some checks failed']
